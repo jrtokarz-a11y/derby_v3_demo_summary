@@ -123,10 +123,17 @@ st.markdown("""
 .bankroll-warn {border-color:#856404;background:#fff8dc;color:#856404;}
 .bankroll-bad {border-color:#721c24;background:#fdecea;color:#721c24;}
 .size-pill {display:inline-block;border-radius:999px;padding:4px 10px;background:#111;color:#fff;font-weight:900;margin:2px;}
+.ticket-card {border:3px solid #111;border-radius:16px;padding:14px;margin:10px 0;background:#fff;}
+.ticket-win {border-color:#0b6b28;background:#e9f7ef;color:#155724;}
+.ticket-exacta {border-color:#856404;background:#fff8dc;color:#856404;}
+.ticket-trifecta {border-color:#3b3b98;background:#eef0ff;color:#1f2a7a;}
+.ticket-pass {border-color:#721c24;background:#fdecea;color:#721c24;}
+.ticket-title {font-size:22px;font-weight:1000;}
+.ticket-lines {font-family:monospace;font-weight:800;margin-top:6px;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3.9 - Bankroll + Bet Sizing Engine")
+st.title("Derby V4.0 - Bet Structure Engine")
 st.markdown("<span class='animated-badge'>Race-day auto mode</span>", unsafe_allow_html=True)
 st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
@@ -251,6 +258,15 @@ with st.sidebar:
     a_play_multiplier = st.slider("A-play size multiplier", 0.25, 2.0, 1.0, 0.25)
     b_play_multiplier = st.slider("B-play size multiplier", 0.10, 1.0, 0.5, 0.10)
     c_play_multiplier = st.slider("C-play size multiplier", 0.05, 0.5, 0.2, 0.05)
+
+    st.header("Bet Structure Engine")
+    exacta_unit = st.number_input("Exacta unit ($)", min_value=0.10, value=1.00, step=0.50)
+    trifecta_unit = st.number_input("Trifecta unit ($)", min_value=0.10, value=0.50, step=0.50)
+    max_exacta_horses = st.slider("Max exacta horses", 2, 5, 4, 1)
+    max_trifecta_horses = st.slider("Max trifecta horses", 3, 6, 5, 1)
+    min_win_edge_gap = st.slider("Win edge gap threshold %", 1, 20, 6, 1)
+    enable_place_show = st.checkbox("Allow Place/Show recommendations", True)
+    enable_trifecta = st.checkbox("Allow Trifecta recommendations", True)
     max_daily_bets = st.slider("Max recommended bets/day", 1, 6, 3, 1)
     min_a_ev = st.slider("A-play min EV %", 5, 30, 10, 1)
     min_b_ev = st.slider("B-play min EV %", 1, 20, 6, 1)
@@ -733,6 +749,247 @@ def grouped_roi(bets: pd.DataFrame, group_col: str) -> pd.DataFrame:
     return out.sort_values("profit", ascending=False)
 
 
+
+def exacta_box_cost(n: int, unit: float) -> float:
+    return n * max(n - 1, 0) * float(unit)
+
+
+def trifecta_box_cost(n: int, unit: float) -> float:
+    return n * max(n - 1, 0) * max(n - 2, 0) * float(unit)
+
+
+def top_contenders_for_race(race_obj, max_rows: int = 6) -> pd.DataFrame:
+    try:
+        _odds, _factors, rankings, _shape, _call, _top, _greens, _yellows, _exacta = analyze_single_race(race_obj)
+        cols = [
+            "runner", "tier", "model_prob_pct", "expected_value_pct", "kelly_fraction_pct",
+            "best_american_odds", "pace_engine_score", "factor_score"
+        ]
+        available = [c for c in cols if c in rankings.columns]
+        return rankings[available].head(max_rows).copy()
+    except Exception:
+        return pd.DataFrame()
+
+
+def build_ticket_lines(ticket_type: str, horses: list[str], key_horse: str | None = None) -> list[str]:
+    if ticket_type == "WIN":
+        return [f"WIN: {horses[0]}"]
+    if ticket_type == "PLACE":
+        return [f"PLACE: {horses[0]}"]
+    if ticket_type == "SHOW":
+        return [f"SHOW: {horses[0]}"]
+    if ticket_type == "EXACTA BOX":
+        return [f"EXACTA BOX: {', '.join(horses)}"]
+    if ticket_type == "EXACTA KEY":
+        underneath = [h for h in horses if h != key_horse]
+        return [f"EXACTA KEY: {key_horse} over {', '.join(underneath)}"]
+    if ticket_type == "TRIFECTA BOX":
+        return [f"TRIFECTA BOX: {', '.join(horses)}"]
+    if ticket_type == "TRIFECTA KEY":
+        underneath = [h for h in horses if h != key_horse]
+        return [f"TRIFECTA KEY: {key_horse} over/with {', '.join(underneath)}"]
+    return ["PASS"]
+
+
+def choose_bet_structure(row: pd.Series, contenders: pd.DataFrame, current_bankroll_value: float) -> dict:
+    tier = str(row.get("Tier", "RED"))
+    ev = float(row.get("EV %", 0))
+    kelly = float(row.get("Kelly %", 0))
+    grade = str(row.get("Play Grade", "PASS"))
+    recommendation = str(row.get("Recommendation", "PASS"))
+    race_num = int(row.get("Race #", 0))
+    top_horse = str(row.get("Best Horse", ""))
+
+    if recommendation == "PASS" or grade == "PASS" or contenders.empty:
+        return {
+            "Race #": race_num,
+            "Race": row.get("Race", ""),
+            "Post": row.get("Post", ""),
+            "Ticket Type": "PASS",
+            "Ticket Grade": "PASS",
+            "Horses": "",
+            "Key Horse": "",
+            "Ticket Cost": 0.0,
+            "Recommended Stake": 0.0,
+            "Reason": "No qualifying edge.",
+            "Ticket Lines": "PASS",
+        }
+
+    c = contenders.copy()
+    c["model_prob_pct"] = pd.to_numeric(c.get("model_prob_pct", 0), errors="coerce").fillna(0)
+    c["expected_value_pct"] = pd.to_numeric(c.get("expected_value_pct", 0), errors="coerce").fillna(0)
+    c = c.sort_values(["model_prob_pct", "expected_value_pct"], ascending=False).reset_index(drop=True)
+
+    horses = c["runner"].astype(str).tolist()
+    top_prob = float(c.iloc[0]["model_prob_pct"])
+    second_prob = float(c.iloc[1]["model_prob_pct"]) if len(c) > 1 else 0.0
+    edge_gap = top_prob - second_prob
+
+    race_cap = current_bankroll_value * (max_race_exposure_pct / 100)
+    daily_cap = current_bankroll_value * (max_daily_exposure_pct / 100)
+
+    base_win_size = recommended_bet_size(grade, kelly, current_bankroll_value)
+
+    # 1. Clear standout = win, sometimes place/show fallback.
+    if grade in ["A", "B"] and edge_gap >= min_win_edge_gap and ev >= min_b_ev:
+        ticket_type = "WIN"
+        stake = max(base_win_size, 0.0)
+        if enable_place_show and grade == "B" and ev < min_a_ev:
+            ticket_type = "PLACE"
+            stake = round(base_win_size * 0.75, 2)
+        lines = build_ticket_lines(ticket_type, [top_horse])
+        return {
+            "Race #": race_num,
+            "Race": row.get("Race", ""),
+            "Post": row.get("Post", ""),
+            "Ticket Type": ticket_type,
+            "Ticket Grade": grade,
+            "Horses": top_horse,
+            "Key Horse": top_horse,
+            "Ticket Cost": stake,
+            "Recommended Stake": stake,
+            "Reason": f"Top horse has clear probability gap ({edge_gap:.1f} pts).",
+            "Ticket Lines": " | ".join(lines),
+        }
+
+    # 2. Clustered top contenders = exacta box or exacta key.
+    exacta_n = min(max_exacta_horses, max(2, min(len(horses), 4)))
+    exacta_horses = horses[:exacta_n]
+    exacta_cost = exacta_box_cost(len(exacta_horses), exacta_unit)
+
+    if grade in ["A", "B"] and exacta_cost <= race_cap:
+        if edge_gap >= (min_win_edge_gap / 2):
+            ticket_type = "EXACTA KEY"
+            # Key top over next contenders: cheaper than box
+            key_horse = top_horse
+            ticket_cost = max(len(exacta_horses) - 1, 0) * exacta_unit
+            reason = "Top horse has some edge, but exacta offers better structure than pure win."
+        else:
+            ticket_type = "EXACTA BOX"
+            key_horse = ""
+            ticket_cost = exacta_cost
+            reason = "Top contenders are clustered; box protects order uncertainty."
+        lines = build_ticket_lines(ticket_type, exacta_horses, key_horse or None)
+        return {
+            "Race #": race_num,
+            "Race": row.get("Race", ""),
+            "Post": row.get("Post", ""),
+            "Ticket Type": ticket_type,
+            "Ticket Grade": grade,
+            "Horses": ", ".join(exacta_horses),
+            "Key Horse": key_horse,
+            "Ticket Cost": round(ticket_cost, 2),
+            "Recommended Stake": round(ticket_cost, 2),
+            "Reason": reason,
+            "Ticket Lines": " | ".join(lines),
+        }
+
+    # 3. C-grade or chaotic/clustered race = tiny trifecta if enabled and affordable.
+    if enable_trifecta and len(horses) >= 3:
+        tri_n = min(max_trifecta_horses, len(horses), 5)
+        tri_horses = horses[:tri_n]
+        tri_cost = trifecta_box_cost(len(tri_horses), trifecta_unit)
+        tri_key_cost = max(len(tri_horses) - 1, 0) * max(len(tri_horses) - 2, 0) * trifecta_unit
+        if grade in ["A", "B", "C"] and tri_key_cost <= race_cap * 0.75:
+            ticket_type = "TRIFECTA KEY"
+            key_horse = top_horse
+            lines = build_ticket_lines(ticket_type, tri_horses, key_horse)
+            return {
+                "Race #": race_num,
+                "Race": row.get("Race", ""),
+                "Post": row.get("Post", ""),
+                "Ticket Type": ticket_type,
+                "Ticket Grade": grade,
+                "Horses": ", ".join(tri_horses),
+                "Key Horse": key_horse,
+                "Ticket Cost": round(tri_key_cost, 2),
+                "Recommended Stake": round(tri_key_cost, 2),
+                "Reason": "Clustered contenders; tiny trifecta key offers upside with controlled cost.",
+                "Ticket Lines": " | ".join(lines),
+            }
+        if grade == "C" and tri_cost <= race_cap * 0.5:
+            ticket_type = "TRIFECTA BOX"
+            lines = build_ticket_lines(ticket_type, tri_horses)
+            return {
+                "Race #": race_num,
+                "Race": row.get("Race", ""),
+                "Post": row.get("Post", ""),
+                "Ticket Type": ticket_type,
+                "Ticket Grade": grade,
+                "Horses": ", ".join(tri_horses),
+                "Key Horse": "",
+                "Ticket Cost": round(tri_cost, 2),
+                "Recommended Stake": round(tri_cost, 2),
+                "Reason": "Small speculative structure only; no standout winner.",
+                "Ticket Lines": " | ".join(lines),
+            }
+
+    # 4. If exotics are too expensive, downgrade to show/place or pass.
+    if enable_place_show and grade in ["A", "B"] and base_win_size > 0:
+        ticket_type = "SHOW" if grade == "B" else "PLACE"
+        stake = round(min(base_win_size * 0.5, race_cap), 2)
+        lines = build_ticket_lines(ticket_type, [top_horse])
+        return {
+            "Race #": race_num,
+            "Race": row.get("Race", ""),
+            "Post": row.get("Post", ""),
+            "Ticket Type": ticket_type,
+            "Ticket Grade": grade,
+            "Horses": top_horse,
+            "Key Horse": top_horse,
+            "Ticket Cost": stake,
+            "Recommended Stake": stake,
+            "Reason": "Exotic structure exceeded risk cap; downgraded to conservative straight wager.",
+            "Ticket Lines": " | ".join(lines),
+        }
+
+    return {
+        "Race #": race_num,
+        "Race": row.get("Race", ""),
+        "Post": row.get("Post", ""),
+        "Ticket Type": "PASS",
+        "Ticket Grade": "PASS",
+        "Horses": "",
+        "Key Horse": "",
+        "Ticket Cost": 0.0,
+        "Recommended Stake": 0.0,
+        "Reason": "No affordable structure under bankroll caps.",
+        "Ticket Lines": "PASS",
+    }
+
+
+def build_bet_structure_board(recommendations_df: pd.DataFrame, current_bankroll_value: float) -> pd.DataFrame:
+    if recommendations_df.empty:
+        return pd.DataFrame()
+
+    tickets = []
+    race_lookup = {r.number: r for r in races}
+
+    # Only build structures for top recommendation board, but include PASS rows for context.
+    for _, row in recommendations_df.iterrows():
+        race_num = int(row.get("Race #", 0))
+        race_obj = race_lookup.get(race_num)
+        if race_obj is None:
+            continue
+        contenders = top_contenders_for_race(race_obj)
+        tickets.append(choose_bet_structure(row, contenders, current_bankroll_value))
+
+    out = pd.DataFrame(tickets)
+    if out.empty:
+        return out
+
+    # Enforce total daily exposure cap across suggested tickets.
+    daily_cap = current_bankroll_value * (max_daily_exposure_pct / 100)
+    total = out["Recommended Stake"].sum()
+    if total > daily_cap and total > 0:
+        scale = daily_cap / total
+        out["Recommended Stake"] = (out["Recommended Stake"] * scale).round(2)
+        out["Ticket Cost"] = out["Recommended Stake"]
+        out["Reason"] = out["Reason"] + " Daily exposure cap scaled stake."
+
+    return out
+
+
 st.markdown(
     f"<div class='bankroll-card {bankroll_css}'>"
     f"<b>Bankroll Engine:</b> {bankroll_status}<br>"
@@ -742,7 +999,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger", "ROI Dashboard", "Bankroll Dashboard"])
+tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Bet Structures", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger", "ROI Dashboard", "Bankroll Dashboard"])
 
 with tabs[0]:
     st.subheader("Daily card summary")
@@ -804,7 +1061,7 @@ with tabs[0]:
     st.dataframe(summary_df.style.apply(style_summary, axis=1), use_container_width=True, hide_index=True)
     st.download_button("Download daily summary CSV", summary_df.to_csv(index=False).encode("utf-8"), "daily_summary.csv", "text/csv")
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Steam / odds movement board")
     st.caption("Negative odds move = odds shortened = steam. Positive odds move = drift.")
     steam_counts = summary_df["Steam Signal"].value_counts() if "Steam Signal" in summary_df.columns else pd.Series(dtype=int)
@@ -829,7 +1086,7 @@ with tabs[3]:
     steam_cols = ["Race #", "Race", "Best Horse", "Tier", "Best Play", "EV %", "Odds", "Steam Signal", "Odds Move %", "Sharp/Public", "Public Hype"]
     st.dataframe(summary_df[[c for c in steam_cols if c in summary_df.columns]], use_container_width=True, hide_index=True)
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("Locked-in best horses per race")
     st.caption("Phone-friendly view: best horse, confidence tier, suggested action, and Reddit overlay.")
 
@@ -858,7 +1115,7 @@ with tabs[4]:
         )
         st.markdown(html, unsafe_allow_html=True)
 
-with tabs[5]:
+with tabs[6]:
     st.subheader("Sharp value alert board")
     if "Sharp Low-Hype Alert" not in summary_df.columns:
         st.info("Run a scan first.")
@@ -877,7 +1134,7 @@ with tabs[5]:
         if not len(sharp_alerts) and not len(trap_alerts):
             st.info("No sharp/public alerts found yet. Try enabling Reddit or lowering the low-hype threshold.")
 
-with tabs[6]:
+with tabs[7]:
     st.subheader("Reddit signal board")
     if not use_reddit:
         st.info("Turn on 'Enable Reddit layer' in the sidebar.")
@@ -891,7 +1148,7 @@ with tabs[6]:
         c1.metric("Sharp low-buzz spots", len(sharp))
         c2.metric("Public trap risks", len(traps))
 
-with tabs[7]:
+with tabs[8]:
     race_map = {f"Race {r.number} - {r.name} - {r.post_time}": r for r in races}
     selected = st.selectbox("Select race", list(race_map))
     race = race_map[selected]
@@ -945,11 +1202,11 @@ with tabs[7]:
         st.write(", ".join(trifecta_horses))
         st.metric("Combos", trifecta_count(len(trifecta_horses)))
 
-with tabs[8]:
+with tabs[9]:
     st.subheader("Alert log")
     st.dataframe(load_alerts(200), use_container_width=True, hide_index=True)
 
-with tabs[9]:
+with tabs[10]:
     st.subheader("Odds history")
     race_map2 = {f"Race {r.number} - {r.name}": r for r in races}
     r2 = st.selectbox("Odds history race", list(race_map2), key="hist_race")
@@ -968,7 +1225,7 @@ with tabs[10]:
     race_names = {f"Race {r.number} {r.name}": r for r in races}
     race_label = st.selectbox("Race for bet", list(race_names), key="bet_race")
     br = race_names[race_label]
-    bet_type = st.selectbox("Bet type", ["Win","Place","Show","Exacta Box","Trifecta Box","Pass"])
+    bet_type = st.selectbox("Bet type", ["Win","Place","Show","Exacta Box","Exacta Key","Trifecta Box","Trifecta Key","Pass"])
     horses = st.text_input("Horse(s)")
     stake = st.number_input("Stake", min_value=0.0, value=1.0, step=1.0)
     odds_taken = st.number_input("Odds taken American", value=0, step=10)
@@ -1028,7 +1285,7 @@ if auto_scan and auto_rerun:
         st.rerun()
 
 
-with tabs[12]:
+with tabs[13]:
     st.subheader("Bankroll Dashboard")
     bets = load_bets()
     current_bankroll_value = current_bankroll_from_bets(starting_bankroll, bets)

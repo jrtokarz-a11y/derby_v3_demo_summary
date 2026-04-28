@@ -1,15 +1,14 @@
-# Derby V3.9 Bankroll + Bet Sizing Engine
+# Derby V4.0 Bet Structure Engine
 
 Adds:
-- Bankroll Engine sidebar controls
-- Starting/current bankroll tracking
-- Daily stop-loss
-- Max exposure per race
-- Max total daily exposure
-- A/B/C play sizing multipliers
-- Bankroll-sized recommendations
-- Bankroll Dashboard
-- Bankroll history proxy
-- Risk caps applied to Today's Plays
+- Bet Structures tab
+- Chooses WIN / PLACE / SHOW
+- Chooses EXACTA BOX vs EXACTA KEY
+- Chooses TRIFECTA BOX vs TRIFECTA KEY
+- PASS when no affordable structure fits risk caps
+- Ticket cost calculation
+- Ticket lines formatted like a bet slip
+- Integrates with bankroll caps and daily exposure
+- Downloadable ticket board CSV
 
-Use this to size bets conservatively and prevent overexposure.
+This app still does not place bets. It recommends disciplined ticket structures.
