@@ -170,7 +170,12 @@ class LiveProvider:
 from real_scraper_provider import EquibaseOption1Provider
 
 
+from live_odds_provider import LiveOddsAPIProvider
+
+
 def get_provider(mode: str):
+    if mode == "Live Odds API":
+        return LiveOddsAPIProvider()
     if mode == "Auto Real Data":
         return EquibaseOption1Provider()
     if mode == "CSV Import":

@@ -1,12 +1,35 @@
-# Derby V4.1.1 Timing Engine Fix
+# Derby V4.2 Live Odds API Connector
 
-Fixes:
-- NameError / ordering issue where timing_board_df tried to use recommendations_df before it existed
-- Adds safe defaults for recommendations, bet structures, bankroll variables, and timing board
+Adds:
+- Live Odds API data mode
+- Streamlit Secrets support
+- Generic API adapter
+- Live provider status check
+- Racecards endpoint support
+- Odds endpoint support
+- Graceful fallback to Demo if API fails
 
-Keeps:
-- Timing Engine
-- Bet Structure Engine
-- Bankroll Engine
-- ROI Dashboard
-- Auto Real Data / Demo modes
+## Required secrets
+
+In Streamlit Cloud > App settings > Secrets:
+
+```toml
+LIVE_ODDS_PROVIDER = "THERACINGAPI"
+RACING_API_KEY = "your_key_here"
+RACING_API_BASE_URL = "https://api.theracingapi.com/v1"
+```
+
+## Expected endpoints
+
+The generic adapter expects:
+
+```text
+GET /racecards?track=Churchill Downs&date=YYYY-MM-DD
+GET /odds?race_id=...
+```
+
+If your provider uses different endpoints or field names, update `live_odds_provider.py`.
+
+## Important
+
+This app does not place bets. Always verify entries, scratches, odds, and legality before wagering.

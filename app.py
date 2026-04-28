@@ -140,8 +140,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V4.1.1 - Timing Engine Fix")
-st.markdown("<span class='animated-badge'>Odds timing engine mode</span>", unsafe_allow_html=True)
+st.title("Derby V4.2 - Live Odds API Connector")
+st.markdown("<span class='animated-badge'>Live odds API mode</span>", unsafe_allow_html=True)
 st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
 mode = "Demo"  # safe default
@@ -167,6 +167,15 @@ TRACK_OPTIONS = [
     "Tampa Bay Downs",
     "Custom"
 ]
+
+
+def live_api_config_status():
+    import os
+    key_ok = bool(os.getenv("RACING_API_KEY") or os.getenv("LIVE_ODDS_API_KEY"))
+    base_ok = bool(os.getenv("RACING_API_BASE_URL") or os.getenv("LIVE_ODDS_API_BASE_URL"))
+    provider_name = os.getenv("LIVE_ODDS_PROVIDER") or "THERACINGAPI"
+    return provider_name, key_ok, base_ok
+
 
 def next_weekday(target_weekday: int):
     today = date.today()
@@ -200,8 +209,10 @@ with st.sidebar:
         """, unsafe_allow_html=True)
 
     st.header("Data mode")
-    mode = st.radio("Data source", ["Auto Real Data", "Demo"], index=0)
-    if mode == "Auto Real Data":
+    mode = st.radio("Data source", ["Live Odds API", "Auto Real Data", "Demo"], index=0)
+    if mode == "Live Odds API":
+        st.caption("Uses configured live odds provider from Streamlit Secrets. Falls back to Demo if unavailable.")
+    elif mode == "Auto Real Data":
         st.caption("Uses public Equibase-style entries when available; falls back to Demo if parsing fails.")
     else:
         st.caption("Demo mode uses simulated race card and odds.")
@@ -312,6 +323,12 @@ with st.sidebar:
 provider = get_provider(mode if "mode" in globals() else "Demo")
 
 st.info(f"Current data source: {mode}")
+if mode == "Live Odds API":
+    live_provider_name, live_key_ok, live_base_ok = live_api_config_status()
+    if live_key_ok and live_base_ok:
+        st.success(f"Live Odds API configured: {live_provider_name}")
+    else:
+        st.warning("Live Odds API is selected, but credentials/base URL are missing. Add secrets or the app will fall back to Demo.")
 
 try:
     races = provider.races(track, str(race_date))
@@ -1490,7 +1507,9 @@ with tabs[10]:
             st.markdown("### ROI by tier")
             st.dataframe(tier_df, use_container_width=True, hide_index=True)
 
-if mode == "Auto Real Data":
+if mode == "Live Odds API":
+    st.warning("Live Odds API mode depends on your provider credentials and endpoint format. Verify entries, scratches, and odds before betting.")
+elif mode == "Auto Real Data":
     st.warning("Auto Real Data uses public entries and morning-line odds when available. These are not guaranteed live tote odds. Verify final entries, scratches, and odds before betting.")
 else:
     st.warning("Demo data is for testing only. Reddit is noisy and should be treated as a small sentiment overlay, not a primary betting signal.")
