@@ -1,19 +1,15 @@
-# Derby V3.8.1 Clean Results + ROI
-
-Clean rebuild from stable V3.7.2 plus Results/ROI features.
+# Derby V3.9 Bankroll + Bet Sizing Engine
 
 Adds:
-- Bet Ledger tab
-- Save new bets
-- Quick settle/update bets
-- Delete bets
-- Automatic payout helper
-- ROI Dashboard tab
-- ROI by tier
-- ROI by bet type
-- ROI by track
-- ROI by race
-- CLV report
-- Downloadable bet history CSV
+- Bankroll Engine sidebar controls
+- Starting/current bankroll tracking
+- Daily stop-loss
+- Max exposure per race
+- Max total daily exposure
+- A/B/C play sizing multipliers
+- Bankroll-sized recommendations
+- Bankroll Dashboard
+- Bankroll history proxy
+- Risk caps applied to Today's Plays
 
-This build fixes the indentation error from V3.8.
+Use this to size bets conservatively and prevent overexposure.

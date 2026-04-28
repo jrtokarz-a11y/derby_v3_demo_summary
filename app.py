@@ -118,10 +118,15 @@ st.markdown("""
 .roi-good {background:#d4edda;color:#155724;border-radius:12px;padding:10px;margin:6px 0;font-weight:900;}
 .roi-bad {background:#f8d7da;color:#721c24;border-radius:12px;padding:10px;margin:6px 0;font-weight:900;}
 .roi-neutral {background:#e2e3e5;color:#383d41;border-radius:12px;padding:10px;margin:6px 0;font-weight:900;}
+.bankroll-card {border:3px solid #111;border-radius:16px;padding:14px;margin:10px 0;background:#fff;}
+.bankroll-good {border-color:#0b6b28;background:#e9f7ef;color:#155724;}
+.bankroll-warn {border-color:#856404;background:#fff8dc;color:#856404;}
+.bankroll-bad {border-color:#721c24;background:#fdecea;color:#721c24;}
+.size-pill {display:inline-block;border-radius:999px;padding:4px 10px;background:#111;color:#fff;font-weight:900;margin:2px;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3.8.1 - Clean Results + ROI")
+st.title("Derby V3.9 - Bankroll + Bet Sizing Engine")
 st.markdown("<span class='animated-badge'>Race-day auto mode</span>", unsafe_allow_html=True)
 st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
@@ -238,6 +243,14 @@ with st.sidebar:
     unit = st.number_input("Exotic unit", min_value=0.10, value=1.0, step=.5)
     kelly_mult = st.slider("Kelly fraction", .05, 1.0, .25, .05)
     max_win_pct = st.slider("Max win bet % bankroll", .005, .10, .03, .005)
+    st.header("Bankroll Engine")
+    starting_bankroll = st.number_input("Starting bankroll tracking ($)", min_value=0.0, value=bankroll, step=10.0)
+    daily_stop_loss_pct = st.slider("Daily stop-loss %", 1, 30, 10, 1)
+    max_race_exposure_pct = st.slider("Max exposure per race %", 1, 15, 4, 1)
+    max_daily_exposure_pct = st.slider("Max total daily exposure %", 1, 30, 10, 1)
+    a_play_multiplier = st.slider("A-play size multiplier", 0.25, 2.0, 1.0, 0.25)
+    b_play_multiplier = st.slider("B-play size multiplier", 0.10, 1.0, 0.5, 0.10)
+    c_play_multiplier = st.slider("C-play size multiplier", 0.05, 0.5, 0.2, 0.05)
     max_daily_bets = st.slider("Max recommended bets/day", 1, 6, 3, 1)
     min_a_ev = st.slider("A-play min EV %", 5, 30, 10, 1)
     min_b_ev = st.slider("B-play min EV %", 1, 20, 6, 1)
@@ -633,6 +646,74 @@ def performance_summary(bets: pd.DataFrame) -> dict:
     return {"bets": len(bets), "settled": len(settled), "stake": stake, "profit": profit, "roi": roi, "win_rate": win_rate, "avg_clv": avg_clv}
 
 
+
+def current_bankroll_from_bets(starting_bankroll_value: float, bets: pd.DataFrame) -> float:
+    if bets.empty:
+        return float(starting_bankroll_value)
+    settled = bets[bets["result"].isin(["Won", "Lost"])].copy()
+    profit = float(settled["profit"].sum()) if not settled.empty else 0.0
+    return float(starting_bankroll_value) + profit
+
+
+def bankroll_health(starting_bankroll_value: float, current_bankroll_value: float) -> tuple[str, str]:
+    if starting_bankroll_value <= 0:
+        return "Neutral", "bankroll-warn"
+    change_pct = (current_bankroll_value - starting_bankroll_value) / starting_bankroll_value * 100
+    if change_pct >= 5:
+        return f"Healthy (+{change_pct:.1f}%)", "bankroll-good"
+    if change_pct <= -daily_stop_loss_pct:
+        return f"Stop-loss zone ({change_pct:.1f}%)", "bankroll-bad"
+    if change_pct < 0:
+        return f"Caution ({change_pct:.1f}%)", "bankroll-warn"
+    return f"Stable (+{change_pct:.1f}%)", "bankroll-good"
+
+
+def recommended_bet_size(play_grade: str, kelly_pct: float, current_bankroll_value: float) -> float:
+    kelly_fraction = max(float(kelly_pct) / 100, 0.0)
+    if play_grade == "A":
+        mult = a_play_multiplier
+    elif play_grade == "B":
+        mult = b_play_multiplier
+    elif play_grade == "C":
+        mult = c_play_multiplier
+    else:
+        return 0.0
+
+    raw = current_bankroll_value * kelly_fraction * kelly_mult * mult
+    race_cap = current_bankroll_value * (max_race_exposure_pct / 100)
+    win_cap = current_bankroll_value * max_win_pct
+    return round(max(min(raw, race_cap, win_cap), 0.0), 2)
+
+
+def apply_bankroll_engine(recommendations_df: pd.DataFrame, current_bankroll_value: float) -> pd.DataFrame:
+    if recommendations_df.empty:
+        return recommendations_df
+
+    df = recommendations_df.copy()
+    if "Play Grade" not in df.columns:
+        df["Play Grade"] = "PASS"
+    if "Kelly %" not in df.columns:
+        df["Kelly %"] = 0.0
+
+    df["Bankroll Bet $"] = df.apply(
+        lambda row: recommended_bet_size(row.get("Play Grade", "PASS"), row.get("Kelly %", 0.0), current_bankroll_value),
+        axis=1,
+    )
+
+    # Enforce daily total exposure cap by scaling down recommended bets.
+    daily_cap = current_bankroll_value * (max_daily_exposure_pct / 100)
+    total = float(df["Bankroll Bet $"].sum())
+    if total > daily_cap and total > 0:
+        scale = daily_cap / total
+        df["Bankroll Bet $"] = (df["Bankroll Bet $"] * scale).round(2)
+
+    df["Sizing Note"] = df.apply(
+        lambda row: "PASS" if row["Bankroll Bet $"] <= 0 else f"{row['Play Grade']}-play sized with caps",
+        axis=1,
+    )
+
+    return df
+
 def grouped_roi(bets: pd.DataFrame, group_col: str) -> pd.DataFrame:
     if bets.empty or group_col not in bets.columns:
         return pd.DataFrame()
@@ -652,7 +733,16 @@ def grouped_roi(bets: pd.DataFrame, group_col: str) -> pd.DataFrame:
     return out.sort_values("profit", ascending=False)
 
 
-tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger", "ROI Dashboard"])
+st.markdown(
+    f"<div class='bankroll-card {bankroll_css}'>"
+    f"<b>Bankroll Engine:</b> {bankroll_status}<br>"
+    f"Starting bankroll: ${starting_bankroll:.2f} | Current bankroll: ${current_bankroll_value:.2f}<br>"
+    f"Daily exposure cap: {max_daily_exposure_pct}% | Race cap: {max_race_exposure_pct}% | Stop-loss: {daily_stop_loss_pct}%"
+    f"</div>",
+    unsafe_allow_html=True,
+)
+
+tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger", "ROI Dashboard", "Bankroll Dashboard"])
 
 with tabs[0]:
     st.subheader("Daily card summary")
@@ -936,3 +1026,57 @@ if auto_scan and auto_rerun:
     time.sleep(1)
     if time.time() - st.session_state.last_scan >= scan_seconds:
         st.rerun()
+
+
+with tabs[12]:
+    st.subheader("Bankroll Dashboard")
+    bets = load_bets()
+    current_bankroll_value = current_bankroll_from_bets(starting_bankroll, bets)
+    bankroll_status, bankroll_css = bankroll_health(starting_bankroll, current_bankroll_value)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Starting bankroll", f"${starting_bankroll:.2f}")
+    c2.metric("Current bankroll", f"${current_bankroll_value:.2f}")
+    c3.metric("Net change", f"${current_bankroll_value - starting_bankroll:.2f}")
+    c4.metric("Status", bankroll_status)
+
+    stop_loss_amount = starting_bankroll * (daily_stop_loss_pct / 100)
+    daily_cap = current_bankroll_value * (max_daily_exposure_pct / 100)
+    race_cap = current_bankroll_value * (max_race_exposure_pct / 100)
+
+    st.markdown("### Risk limits")
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Daily stop-loss", f"${stop_loss_amount:.2f}")
+    r2.metric("Max daily exposure", f"${daily_cap:.2f}")
+    r3.metric("Max race exposure", f"${race_cap:.2f}")
+
+    st.markdown("### Recommended sizing by play grade")
+    sizing_rows = pd.DataFrame([
+        {"Play Grade": "A", "Multiplier": a_play_multiplier, "Use Case": "Best edge / strongest confirmation"},
+        {"Play Grade": "B", "Multiplier": b_play_multiplier, "Use Case": "Good edge / smaller position"},
+        {"Play Grade": "C", "Multiplier": c_play_multiplier, "Use Case": "Tiny action only / exotic support"},
+        {"Play Grade": "PASS", "Multiplier": 0.0, "Use Case": "No bet"},
+    ])
+    st.dataframe(sizing_rows, use_container_width=True, hide_index=True)
+
+    st.markdown("### Bankroll-sized recommendations")
+    if "recommendations_df" in globals() and not recommendations_df.empty:
+        cols = ["Race #", "Race", "Best Horse", "Play Grade", "Recommendation", "Bet Type", "EV %", "Kelly %", "Bankroll Bet $", "Sizing Note"]
+        st.dataframe(recommendations_df[[c for c in cols if c in recommendations_df.columns]], use_container_width=True, hide_index=True)
+    else:
+        st.info("No recommendations available yet.")
+
+    st.markdown("### Bankroll history proxy")
+    if bets.empty:
+        st.info("No bet history yet.")
+    else:
+        settled = bets[bets["result"].isin(["Won", "Lost"])].copy()
+        if settled.empty:
+            st.info("No settled bets yet.")
+        else:
+            settled = settled.sort_values("id")
+            settled["running_profit"] = settled["profit"].cumsum()
+            settled["estimated_bankroll"] = starting_bankroll + settled["running_profit"]
+            chart_df = settled.set_index("id")[["estimated_bankroll"]]
+            st.line_chart(chart_df)
+            st.dataframe(settled[["id", "date", "race_name", "horses", "tier", "stake", "result", "profit", "estimated_bankroll"]], use_container_width=True, hide_index=True)
