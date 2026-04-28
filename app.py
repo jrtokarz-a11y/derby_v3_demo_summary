@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 import os
 import time
+import re
 
 import pandas as pd
 import streamlit as st
@@ -130,11 +131,17 @@ st.markdown("""
 .ticket-pass {border-color:#721c24;background:#fdecea;color:#721c24;}
 .ticket-title {font-size:22px;font-weight:1000;}
 .ticket-lines {font-family:monospace;font-weight:800;margin-top:6px;}
+.timing-card {border:3px solid #111;border-radius:16px;padding:14px;margin:10px 0;background:#fff;}
+.timing-now {border-color:#0b6b28;background:#e9f7ef;color:#155724;}
+.timing-soon {border-color:#856404;background:#fff8dc;color:#856404;}
+.timing-wait {border-color:#3b3b98;background:#eef0ff;color:#1f2a7a;}
+.timing-pass {border-color:#721c24;background:#fdecea;color:#721c24;}
+.timing-title {font-size:22px;font-weight:1000;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V4.0.1 - Bet Structure Engine Fix")
-st.markdown("<span class='animated-badge'>Race-day auto mode</span>", unsafe_allow_html=True)
+st.title("Derby V4.1 - Real-Time Odds + Timing Engine")
+st.markdown("<span class='animated-badge'>Odds timing engine mode</span>", unsafe_allow_html=True)
 st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
 mode = "Demo"  # safe default
@@ -244,6 +251,14 @@ with st.sidebar:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
+
+    st.header("Odds Timing Engine")
+    prime_window_start = st.slider("Prime bet window starts: minutes to post", 1, 30, 10, 1)
+    prime_window_end = st.slider("Prime bet window ends: minutes to post", 0, 10, 2, 1)
+    watch_window_start = st.slider("Watch window starts: minutes to post", 5, 60, 25, 5)
+    stale_odds_minutes = st.slider("Stale odds warning after minutes", 2, 30, 8, 1)
+    require_prime_window_for_a = st.checkbox("Require prime window for full A-play size", True)
+
 
     st.header("Bankroll")
     bankroll = st.number_input("Bankroll", min_value=0.0, value=100.0, step=10.0)
@@ -1002,6 +1017,7 @@ if "recommendations_df" in globals() and "apply_bankroll_engine" in globals():
     recommendations_df = apply_bankroll_engine(recommendations_df, current_bankroll_value)
 if "bet_structure_df" not in globals() and "build_bet_structure_board" in globals() and "recommendations_df" in globals():
     bet_structure_df = build_bet_structure_board(recommendations_df, current_bankroll_value)
+timing_board_df = build_timing_board(summary_df, recommendations_df)
 
 st.markdown(
     f"<div class='bankroll-card {bankroll_css}'>"
@@ -1012,7 +1028,137 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Bet Structures", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger", "ROI Dashboard", "Bankroll Dashboard"])
+
+def parse_post_time_minutes(post_time: str) -> int | None:
+    """
+    Convert post time like '6:57 PM ET' into minutes from now.
+    Uses today's selected race_date and local app timezone. This is a practical approximation for race-day timing.
+    """
+    try:
+        txt = str(post_time or "").strip()
+        if not txt:
+            return None
+        m = re.search(r"(\d{1,2}):(\d{2})\s*([AP]M)", txt, re.I)
+        if not m:
+            return None
+        hour = int(m.group(1))
+        minute = int(m.group(2))
+        ampm = m.group(3).upper()
+        if ampm == "PM" and hour != 12:
+            hour += 12
+        if ampm == "AM" and hour == 12:
+            hour = 0
+        target = datetime.combine(race_date, datetime.min.time()).replace(hour=hour, minute=minute)
+        delta = target - datetime.now()
+        return int(delta.total_seconds() // 60)
+    except Exception:
+        return None
+
+
+def latest_snapshot_age_minutes() -> float | None:
+    try:
+        last_scan = st.session_state.get("last_scan", 0)
+        if not last_scan:
+            return None
+        return max((time.time() - float(last_scan)) / 60, 0)
+    except Exception:
+        return None
+
+
+def timing_action(minutes_to_post, steam_signal: str, tier: str, recommendation: str) -> tuple[str, str, str]:
+    """
+    Returns: action, css class, reason
+    """
+    if minutes_to_post is None:
+        if recommendation == "PASS":
+            return "PASS", "timing-pass", "No post time available and no bet signal."
+        return "WATCH", "timing-wait", "No post time available; watch but do not rush."
+
+    if minutes_to_post < 0:
+        return "CLOSED / POSTED", "timing-pass", "Race appears to be past post time."
+    if recommendation == "PASS":
+        return "PASS", "timing-pass", "No qualifying edge."
+    if minutes_to_post > watch_window_start:
+        return "WAIT", "timing-wait", f"Too early. Start serious watch inside {watch_window_start} minutes."
+    if prime_window_end <= minutes_to_post <= prime_window_start:
+        if steam_signal in ["STRONG STEAM", "STEAM"] and tier in ["GREEN+", "GREEN"]:
+            return "BET NOW", "timing-now", "Prime window plus steam confirmation."
+        if tier in ["GREEN+", "GREEN"]:
+            return "BET / CONFIRM ODDS", "timing-now", "Prime window and qualifying model signal."
+        return "SMALL ONLY", "timing-soon", "Prime window but signal is not elite."
+    if minutes_to_post < prime_window_end:
+        return "LAST CALL", "timing-soon", "Very late. Bet only if odds are still acceptable."
+    return "WATCH", "timing-wait", "Approaching prime betting window."
+
+
+def build_timing_board(summary_df: pd.DataFrame, recommendations_df: pd.DataFrame) -> pd.DataFrame:
+    if summary_df.empty:
+        return pd.DataFrame()
+
+    rec_cols = ["Race #", "Recommendation", "Play Grade", "Bet Type", "Bankroll Bet $", "Suggested Bet $"]
+    rec = recommendations_df[[c for c in rec_cols if c in recommendations_df.columns]].copy() if not recommendations_df.empty else pd.DataFrame()
+
+    df = summary_df.copy()
+    if not rec.empty and "Race #" in rec.columns:
+        df = df.merge(rec, on="Race #", how="left", suffixes=("", "_rec"))
+
+    for col, default in {
+        "Recommendation": "PASS",
+        "Play Grade": "PASS",
+        "Bet Type": "PASS",
+        "Bankroll Bet $": 0.0,
+        "Suggested Bet $": 0.0,
+        "Steam Signal": "STABLE",
+    }.items():
+        if col not in df.columns:
+            df[col] = default
+
+    df["Minutes To Post"] = df["Post"].apply(parse_post_time_minutes)
+    df["Odds Snapshot Age Min"] = latest_snapshot_age_minutes()
+    df["Odds Freshness"] = df["Odds Snapshot Age Min"].apply(
+        lambda x: "UNKNOWN" if x is None else ("STALE" if x > stale_odds_minutes else "FRESH")
+    )
+
+    actions = df.apply(
+        lambda row: timing_action(
+            row.get("Minutes To Post"),
+            str(row.get("Steam Signal", "STABLE")),
+            str(row.get("Tier", "")),
+            str(row.get("Recommendation", "PASS")),
+        ),
+        axis=1,
+    )
+    df["Timing Action"] = actions.apply(lambda x: x[0])
+    df["Timing CSS"] = actions.apply(lambda x: x[1])
+    df["Timing Reason"] = actions.apply(lambda x: x[2])
+
+    # Timing score favors current actionable races, steam, A/B grades, and fresh data.
+    def score(row):
+        s = 0
+        if row["Timing Action"] == "BET NOW":
+            s += 100
+        elif row["Timing Action"] == "BET / CONFIRM ODDS":
+            s += 85
+        elif row["Timing Action"] == "LAST CALL":
+            s += 70
+        elif row["Timing Action"] == "WATCH":
+            s += 45
+        if row.get("Steam Signal") == "STRONG STEAM":
+            s += 15
+        elif row.get("Steam Signal") == "STEAM":
+            s += 8
+        if row.get("Play Grade") == "A":
+            s += 12
+        elif row.get("Play Grade") == "B":
+            s += 6
+        if row.get("Odds Freshness") == "STALE":
+            s -= 20
+        return s
+
+    df["Timing Score"] = df.apply(score, axis=1)
+    return df.sort_values(["Timing Score", "Race #"], ascending=[False, True]).reset_index(drop=True)
+
+tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Timing Engine", "Bet Structures", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger", "ROI Dashboard", "Bankroll Dashboard"])
 
 with tabs[0]:
     st.subheader("Daily card summary")
@@ -1074,7 +1220,7 @@ with tabs[0]:
     st.dataframe(summary_df.style.apply(style_summary, axis=1), use_container_width=True, hide_index=True)
     st.download_button("Download daily summary CSV", summary_df.to_csv(index=False).encode("utf-8"), "daily_summary.csv", "text/csv")
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("Steam / odds movement board")
     st.caption("Negative odds move = odds shortened = steam. Positive odds move = drift.")
     steam_counts = summary_df["Steam Signal"].value_counts() if "Steam Signal" in summary_df.columns else pd.Series(dtype=int)
@@ -1099,7 +1245,7 @@ with tabs[4]:
     steam_cols = ["Race #", "Race", "Best Horse", "Tier", "Best Play", "EV %", "Odds", "Steam Signal", "Odds Move %", "Sharp/Public", "Public Hype"]
     st.dataframe(summary_df[[c for c in steam_cols if c in summary_df.columns]], use_container_width=True, hide_index=True)
 
-with tabs[5]:
+with tabs[6]:
     st.subheader("Locked-in best horses per race")
     st.caption("Phone-friendly view: best horse, confidence tier, suggested action, and Reddit overlay.")
 
@@ -1128,7 +1274,7 @@ with tabs[5]:
         )
         st.markdown(html, unsafe_allow_html=True)
 
-with tabs[6]:
+with tabs[7]:
     st.subheader("Sharp value alert board")
     if "Sharp Low-Hype Alert" not in summary_df.columns:
         st.info("Run a scan first.")
@@ -1147,7 +1293,7 @@ with tabs[6]:
         if not len(sharp_alerts) and not len(trap_alerts):
             st.info("No sharp/public alerts found yet. Try enabling Reddit or lowering the low-hype threshold.")
 
-with tabs[7]:
+with tabs[8]:
     st.subheader("Reddit signal board")
     if not use_reddit:
         st.info("Turn on 'Enable Reddit layer' in the sidebar.")
@@ -1161,7 +1307,7 @@ with tabs[7]:
         c1.metric("Sharp low-buzz spots", len(sharp))
         c2.metric("Public trap risks", len(traps))
 
-with tabs[8]:
+with tabs[9]:
     race_map = {f"Race {r.number} - {r.name} - {r.post_time}": r for r in races}
     selected = st.selectbox("Select race", list(race_map))
     race = race_map[selected]
@@ -1215,11 +1361,11 @@ with tabs[8]:
         st.write(", ".join(trifecta_horses))
         st.metric("Combos", trifecta_count(len(trifecta_horses)))
 
-with tabs[9]:
+with tabs[10]:
     st.subheader("Alert log")
     st.dataframe(load_alerts(200), use_container_width=True, hide_index=True)
 
-with tabs[10]:
+with tabs[11]:
     st.subheader("Odds history")
     race_map2 = {f"Race {r.number} - {r.name}": r for r in races}
     r2 = st.selectbox("Odds history race", list(race_map2), key="hist_race")
@@ -1298,7 +1444,7 @@ if auto_scan and auto_rerun:
         st.rerun()
 
 
-with tabs[13]:
+with tabs[14]:
     st.subheader("Bankroll Dashboard")
     bets = load_bets()
     current_bankroll_value = current_bankroll_from_bets(starting_bankroll, bets)

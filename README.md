@@ -1,12 +1,15 @@
-# Derby V4.0.1 Bet Structure Engine Fix
+# Derby V4.1 Real-Time Odds + Timing Engine
 
-Fixes:
-- NameError around bankroll_css / bankroll status card
-- Adds safe fallback bankroll values before rendering the UI
+Adds:
+- Timing Engine tab
+- Minutes-to-post estimates
+- Prime betting window
+- Watch window
+- Stale odds warning
+- BET NOW / WATCH / WAIT / LAST CALL / PASS timing actions
+- Timing alerts inside Race Day Alerts
+- Timing score ranking
+- Downloadable timing board CSV
 
-Keeps:
-- Bet Structure Engine
-- Bankroll Engine
-- ROI Dashboard
-- Auto Real Data / Demo modes
-- Race-day dropdowns
+Important:
+This is timing logic over the connected data source. If your source only has morning-line/demo odds, timing is structural only. For true live execution, connect a real tote/odds provider.
