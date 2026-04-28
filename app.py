@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 from datetime import date, datetime
+import os
 import time
 
 import pandas as pd
@@ -10,11 +11,14 @@ from dotenv import load_dotenv
 from providers import get_provider
 from database import init_db, save_odds_snapshot, load_previous_best_odds, load_alerts, save_bet, load_bets, load_snapshots
 from model import analyze, final_call, exacta_legs, trifecta_count
+from reddit_signals import RedditSignalProvider
+from secrets_loader import load_streamlit_secrets_into_env
 
 load_dotenv()
+load_streamlit_secrets_into_env()
 init_db()
 
-st.set_page_config(page_title="Derby V3 Demo Summary", page_icon="🏇", layout="wide")
+st.set_page_config(page_title="Derby V3.1 Smart Reddit", page_icon="🏇", layout="wide")
 
 st.markdown("""
 <style>
@@ -27,17 +31,26 @@ st.markdown("""
 .summary-card {border:1px solid #ddd;border-radius:12px;padding:12px;margin:8px 0;background:#fafafa;}
 .big-horse {font-size:20px;font-weight:1000;}
 .small-muted {color:#666;font-size:13px;}
+.reddit-chip {display:inline-block;border-radius:999px;padding:3px 8px;background:#eef;margin:2px;font-size:12px;font-weight:800;}
+.fade-chip {display:inline-block;border-radius:999px;padding:3px 8px;background:#f8d7da;color:#721c24;margin:2px;font-size:12px;font-weight:900;}
+.sharp-chip {display:inline-block;border-radius:999px;padding:3px 8px;background:#d4edda;color:#155724;margin:2px;font-size:12px;font-weight:900;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3 - Demo Mode + Daily Summary")
-st.caption("Phone-friendly best horses per race, daily card summary, pace engine, alerts, and ROI tracking.")
+st.title("Derby V3.1 - Demo + Smart Reddit Layer")
+st.caption("Demo-only race model plus optional Reddit sentiment, public hype, fade risk, and sharp/public divergence.")
 
 with st.sidebar:
     st.header("Demo mode")
     st.markdown("**Data source: Demo only**")
     track = st.text_input("Track", "Churchill Downs")
     race_date = st.date_input("Race date", value=date(2026, 5, 2))
+
+    st.header("Smart Reddit")
+    use_reddit = st.checkbox("Enable Reddit layer", value=False)
+    subreddit_text = st.text_input("Subreddits", "horseracing,sportsbook,KentuckyDerby")
+    reddit_limit = st.slider("Posts per subreddit", 25, 250, 75, 25)
+    reddit_model_boost = st.slider("Reddit overlay influence", 0.0, 0.10, 0.03, 0.01)
 
     st.header("Daily scan")
     auto_scan = st.checkbox("Auto-scan full card", False)
@@ -75,24 +88,87 @@ except Exception as exc:
     st.error(f"Data load failed: {exc}")
     st.stop()
 
+@st.cache_data(ttl=600, show_spinner=False)
+def load_reddit_cached(runners, race_name, subreddits, limit):
+    return RedditSignalProvider().fetch(list(runners), race_name, list(subreddits), limit)
+
+def has_reddit_credentials():
+    return bool(os.getenv("REDDIT_CLIENT_ID") and os.getenv("REDDIT_CLIENT_SECRET") and os.getenv("REDDIT_USER_AGENT"))
+
+def apply_reddit_overlay(rankings: pd.DataFrame, reddit_df: pd.DataFrame | None) -> pd.DataFrame:
+    r = rankings.copy()
+    if reddit_df is None or reddit_df.empty:
+        r["mentions"] = 0
+        r["avg_sentiment"] = 0.0
+        r["reddit_signal"] = "Off / none"
+        r["public_hype"] = 0.0
+        r["fade_risk"] = 0
+        r["sharp_public_signal"] = "Model only"
+        return r
+
+    r = r.merge(reddit_df, on="runner", how="left")
+    r[["mentions", "avg_sentiment", "reddit_heat", "public_hype", "fade_risk"]] = r[
+        ["mentions", "avg_sentiment", "reddit_heat", "public_hype", "fade_risk"]
+    ].fillna(0)
+    r["reddit_signal"] = r["reddit_signal"].fillna("Quiet")
+
+    # Smart use: don't let Reddit dominate. Small nudge only.
+    hype = r["public_hype"].astype(float)
+    if hype.sum() > 0 and reddit_model_boost > 0:
+        reddit_adj = hype / hype.sum()
+        r["model_prob"] = (r["model_prob"] * (1 - reddit_model_boost)) + (reddit_adj * reddit_model_boost)
+        total = r["model_prob"].sum()
+        if total:
+            r["model_prob"] = r["model_prob"] / total
+        r["edge_prob"] = r["model_prob"] - r["market_fair_prob"]
+        r["expected_value"] = r["model_prob"] * (r["best_decimal_odds"] - 1) - (1 - r["model_prob"])
+        r["kelly_fraction"] = (r["expected_value"] / (r["best_decimal_odds"] - 1)).clip(lower=0)
+        for col in ["model_prob","edge_prob","expected_value","kelly_fraction"]:
+            r[col + "_pct"] = r[col] * 100
+
+    def divergence(row):
+        if row["tier"] in ["GREEN+", "GREEN"] and row["public_hype"] < 0.35:
+            return "Sharp value / low public buzz"
+        if row["tier"] in ["RED", "YELLOW"] and row["public_hype"] >= 0.75:
+            return "Public trap / fade risk"
+        if row["tier"] in ["GREEN+", "GREEN"] and row["public_hype"] >= 0.65:
+            return "Model + public aligned"
+        return "Neutral"
+
+    r["sharp_public_signal"] = r.apply(divergence, axis=1)
+    return r
+
 def analyze_single_race(race):
     odds = provider.odds(race.race_id)
     factors = provider.factors(race.race_id)
     prev = load_previous_best_odds(race.race_id)
     rankings, shape = analyze(odds, factors, prev, weights, blend)
+
+    reddit_df = None
+    if use_reddit:
+        if not has_reddit_credentials():
+            # handled in UI
+            reddit_df = None
+        else:
+            runners = tuple(rankings["runner"].tolist())
+            subs = tuple(x.strip() for x in subreddit_text.split(",") if x.strip())
+            reddit_df = load_reddit_cached(runners, race.name, subs, reddit_limit)
+
+    rankings = apply_reddit_overlay(rankings, reddit_df)
+
     call = final_call(rankings, shape)
     top = rankings.iloc[0] if len(rankings) else None
     greens = rankings[rankings["tier"].isin(["GREEN+", "GREEN"])]
     yellows = rankings[rankings["tier"] == "YELLOW"]
     active = rankings[~rankings["scratched"]]
     exacta = active.sort_values(["model_prob", "expected_value"], ascending=False).head(min(4, len(active)))
-    return odds, factors, rankings, shape, call, top, greens, yellows, exacta
+    return odds, factors, rankings, shape, call, top, greens, yellows, exacta, reddit_df
 
 def build_daily_summary():
     rows = []
     ts = datetime.now().isoformat(timespec="seconds")
     for race in races:
-        odds, factors, rankings, shape, call, top, greens, yellows, exacta = analyze_single_race(race)
+        odds, factors, rankings, shape, call, top, greens, yellows, exacta, reddit_df = analyze_single_race(race)
         save_odds_snapshot(ts, race.race_id, odds)
         best_play = "PASS"
         if top is not None:
@@ -100,6 +176,7 @@ def build_daily_summary():
                 best_play = f"WIN: {top['runner']}"
             elif len(yellows) >= 3:
                 best_play = "SMALL EXACTA"
+
             rows.append({
                 "Race #": race.number,
                 "Race": race.name,
@@ -116,8 +193,15 @@ def build_daily_summary():
                 "Bias": shape["bias"],
                 "Volatility": shape["volatility"],
                 "Green Count": len(greens),
+                "Reddit": top.get("reddit_signal", "Off / none"),
+                "Mentions": int(top.get("mentions", 0)),
+                "Public Hype": round(float(top.get("public_hype", 0)) * 100, 0),
+                "Sharp/Public": top.get("sharp_public_signal", "Model only"),
             })
     return pd.DataFrame(rows)
+
+if use_reddit and not has_reddit_credentials():
+    st.warning("Reddit layer is ON, but Reddit credentials are missing. Add them in Streamlit Secrets or turn Reddit OFF.")
 
 if auto_scan:
     now = time.time()
@@ -133,7 +217,7 @@ if manual_scan or "daily_summary" not in st.session_state:
 
 summary_df = st.session_state["daily_summary"]
 
-tabs = st.tabs(["Daily Summary", "Best Horses", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
+tabs = st.tabs(["Daily Summary", "Best Horses", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
 
 with tabs[0]:
     st.subheader("Daily card summary")
@@ -145,6 +229,11 @@ with tabs[0]:
     b.metric("Playable races", len(green_races))
     c.metric("Pass races", len(pass_races))
     d.metric("Best EV", f"{summary_df['EV %'].max():.1f}%")
+
+    if use_reddit and "Public Hype" in summary_df:
+        most_hyped = summary_df.sort_values("Public Hype", ascending=False).head(1)
+        if len(most_hyped):
+            st.info(f"Most public-hyped top pick: Race {int(most_hyped.iloc[0]['Race #'])} - {most_hyped.iloc[0]['Best Horse']} ({most_hyped.iloc[0]['Public Hype']:.0f}% hype)")
 
     if len(green_races):
         st.success(f"Top playable race: Race {int(green_races.iloc[0]['Race #'])} - {green_races.iloc[0]['Best Horse']} ({green_races.iloc[0]['Tier']})")
@@ -166,17 +255,26 @@ with tabs[0]:
 
 with tabs[1]:
     st.subheader("Locked-in best horses per race")
-    st.caption("Phone-friendly view: best horse, confidence tier, and suggested action for every race.")
+    st.caption("Phone-friendly view: best horse, confidence tier, suggested action, and Reddit overlay.")
 
     for _, row in summary_df.iterrows():
         tier = row["Tier"]
         css = {"GREEN+":"greenplus","GREEN":"green","YELLOW":"yellow","RED":"red"}.get(tier, "gray")
+        signal = row.get("Sharp/Public", "Model only")
+        if "Sharp value" in signal:
+            chip = f"<span class='sharp-chip'>{signal}</span>"
+        elif "trap" in signal:
+            chip = f"<span class='fade-chip'>{signal}</span>"
+        else:
+            chip = f"<span class='reddit-chip'>{signal}</span>"
         html = (
             f"<div class='summary-card'>"
             f"<div class='{css}'>Race {int(row['Race #'])} - <span class='big-horse'>{row['Best Horse']}</span> - {tier}</div>"
             f"<div><b>Action:</b> {row['Best Play']}</div>"
             f"<div><b>Final Call:</b> {row['Final Call']}</div>"
             f"<div><b>EV:</b> {row['EV %']}% | <b>Kelly:</b> {row['Kelly %']}% | <b>Odds:</b> {row['Odds']}</div>"
+            f"<div><b>Reddit:</b> {row.get('Reddit','Off / none')} | <b>Mentions:</b> {row.get('Mentions',0)} | <b>Hype:</b> {row.get('Public Hype',0)}%</div>"
+            f"<div>{chip}</div>"
             f"<div><b>Pace:</b> {row['Pace']} | <b>Bias:</b> {row['Bias']}</div>"
             f"<div class='small-muted'>{row['Race']} - Post {row['Post']}</div>"
             f"</div>"
@@ -184,11 +282,25 @@ with tabs[1]:
         st.markdown(html, unsafe_allow_html=True)
 
 with tabs[2]:
+    st.subheader("Reddit signal board")
+    if not use_reddit:
+        st.info("Turn on 'Enable Reddit layer' in the sidebar.")
+    elif not has_reddit_credentials():
+        st.warning("Reddit credentials missing. Add REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, and REDDIT_USER_AGENT in Streamlit Secrets.")
+    else:
+        st.dataframe(summary_df[["Race #", "Best Horse", "Tier", "Reddit", "Mentions", "Public Hype", "Sharp/Public"]], use_container_width=True, hide_index=True)
+        traps = summary_df[summary_df["Sharp/Public"].str.contains("trap", case=False, na=False)]
+        sharp = summary_df[summary_df["Sharp/Public"].str.contains("Sharp value", case=False, na=False)]
+        c1,c2 = st.columns(2)
+        c1.metric("Sharp low-buzz spots", len(sharp))
+        c2.metric("Public trap risks", len(traps))
+
+with tabs[3]:
     race_map = {f"Race {r.number} - {r.name} - {r.post_time}": r for r in races}
     selected = st.selectbox("Select race", list(race_map))
     race = race_map[selected]
 
-    odds, factors, rankings, shape, call, top, greens, yellows, exacta = analyze_single_race(race)
+    odds, factors, rankings, shape, call, top, greens, yellows, exacta, reddit_df = analyze_single_race(race)
 
     st.markdown(f"<div class='call'>FINAL CALL: {call}</div>", unsafe_allow_html=True)
     c1,c2,c3,c4 = st.columns(4)
@@ -200,12 +312,17 @@ with tabs[2]:
     css_map = {"GREEN+":"greenplus","GREEN":"green","YELLOW":"yellow","RED":"red","GRAY":"gray"}
     for _, r in rankings.iterrows():
         st.markdown(
-            f"<div class='{css_map.get(r['tier'], 'gray')}'>{r['runner']} - {r['confidence']} - EV {r['expected_value_pct']:.1f}% - Kelly {r['kelly_fraction_pct']:.1f}% - {r['movement_flag']}</div>",
+            f"<div class='{css_map.get(r['tier'], 'gray')}'>{r['runner']} - {r['confidence']} - EV {r['expected_value_pct']:.1f}% - Kelly {r['kelly_fraction_pct']:.1f}% - Reddit {r.get('reddit_signal','Off / none')} - {r.get('sharp_public_signal','Model only')}</div>",
             unsafe_allow_html=True,
         )
 
-    board_cols = ["runner","tier","movement_flag","best_american_odds","market_fair_prob_pct","model_prob_pct","edge_prob_pct","expected_value_pct","kelly_fraction_pct","pace_engine_score","factor_score","books_seen"]
-    st.dataframe(rankings[board_cols], use_container_width=True, hide_index=True)
+    board_cols = [
+        "runner","tier","movement_flag","best_american_odds","market_fair_prob_pct","model_prob_pct",
+        "edge_prob_pct","expected_value_pct","kelly_fraction_pct","pace_engine_score","factor_score",
+        "mentions","avg_sentiment","public_hype","reddit_signal","sharp_public_signal","books_seen"
+    ]
+    available = [c for c in board_cols if c in rankings.columns]
+    st.dataframe(rankings[available], use_container_width=True, hide_index=True)
 
     active = rankings[~rankings["scratched"]]
     win = active[active["tier"].isin(["GREEN+", "GREEN"])].head(3).copy()
@@ -232,11 +349,11 @@ with tabs[2]:
         st.write(", ".join(trifecta_horses))
         st.metric("Combos", trifecta_count(len(trifecta_horses)))
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Alert log")
     st.dataframe(load_alerts(200), use_container_width=True, hide_index=True)
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("Odds history")
     race_map2 = {f"Race {r.number} - {r.name}": r for r in races}
     r2 = st.selectbox("Odds history race", list(race_map2), key="hist_race")
@@ -250,7 +367,7 @@ with tabs[4]:
         pivot = best.pivot(index="ts", columns="runner", values="american_odds")
         st.line_chart(pivot)
 
-with tabs[5]:
+with tabs[6]:
     st.subheader("Bet ledger with CLV")
     race_names = {f"Race {r.number} {r.name}": r for r in races}
     race_label = st.selectbox("Race for bet", list(race_names), key="bet_race")
@@ -302,4 +419,4 @@ with tabs[5]:
             st.markdown("### ROI by tier")
             st.dataframe(tier_df, use_container_width=True, hide_index=True)
 
-st.warning("Demo data is for testing only. This app does not place bets. Never wager money you cannot afford to lose.")
+st.warning("Demo data is for testing only. Reddit is noisy and should be treated as a small sentiment overlay, not a primary betting signal.")
