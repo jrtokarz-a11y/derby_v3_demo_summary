@@ -140,7 +140,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V4.1 - Real-Time Odds + Timing Engine")
+st.title("Derby V4.1.1 - Timing Engine Fix")
 st.markdown("<span class='animated-badge'>Odds timing engine mode</span>", unsafe_allow_html=True)
 st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
@@ -1017,7 +1017,33 @@ if "recommendations_df" in globals() and "apply_bankroll_engine" in globals():
     recommendations_df = apply_bankroll_engine(recommendations_df, current_bankroll_value)
 if "bet_structure_df" not in globals() and "build_bet_structure_board" in globals() and "recommendations_df" in globals():
     bet_structure_df = build_bet_structure_board(recommendations_df, current_bankroll_value)
-timing_board_df = build_timing_board(summary_df, recommendations_df)
+if "recommendations_df" not in globals():
+    try:
+        recommendations_df = build_auto_recommendations(summary_df)
+    except Exception:
+        recommendations_df = pd.DataFrame()
+
+if "all_bets_for_bankroll" not in globals():
+    all_bets_for_bankroll = load_bets()
+
+if "current_bankroll_value" not in globals():
+    current_bankroll_value = current_bankroll_from_bets(globals().get("starting_bankroll", globals().get("bankroll", 100.0)), all_bets_for_bankroll)
+
+try:
+    recommendations_df = apply_bankroll_engine(recommendations_df, current_bankroll_value)
+except Exception:
+    pass
+
+if "bet_structure_df" not in globals():
+    try:
+        bet_structure_df = build_bet_structure_board(recommendations_df, current_bankroll_value)
+    except Exception:
+        bet_structure_df = pd.DataFrame()
+
+try:
+    timing_board_df = build_timing_board(summary_df, recommendations_df)
+except Exception:
+    timing_board_df = pd.DataFrame()
 
 st.markdown(
     f"<div class='bankroll-card {bankroll_css}'>"
@@ -1092,8 +1118,11 @@ def timing_action(minutes_to_post, steam_signal: str, tier: str, recommendation:
 
 
 def build_timing_board(summary_df: pd.DataFrame, recommendations_df: pd.DataFrame) -> pd.DataFrame:
-    if summary_df.empty:
+    if summary_df is None or summary_df.empty:
         return pd.DataFrame()
+
+    if recommendations_df is None:
+        recommendations_df = pd.DataFrame()
 
     rec_cols = ["Race #", "Recommendation", "Play Grade", "Bet Type", "Bankroll Bet $", "Suggested Bet $"]
     rec = recommendations_df[[c for c in rec_cols if c in recommendations_df.columns]].copy() if not recommendations_df.empty else pd.DataFrame()
@@ -1157,6 +1186,36 @@ def build_timing_board(summary_df: pd.DataFrame, recommendations_df: pd.DataFram
 
     df["Timing Score"] = df.apply(score, axis=1)
     return df.sort_values(["Timing Score", "Race #"], ascending=[False, True]).reset_index(drop=True)
+
+
+# Final safety defaults before tabs render.
+if "recommendations_df" not in globals():
+    try:
+        recommendations_df = build_auto_recommendations(summary_df)
+    except Exception:
+        recommendations_df = pd.DataFrame()
+
+if "all_bets_for_bankroll" not in globals():
+    all_bets_for_bankroll = load_bets()
+
+if "current_bankroll_value" not in globals():
+    current_bankroll_value = current_bankroll_from_bets(globals().get("starting_bankroll", globals().get("bankroll", 100.0)), all_bets_for_bankroll)
+
+if "bankroll_status" not in globals() or "bankroll_css" not in globals():
+    bankroll_status, bankroll_css = bankroll_health(globals().get("starting_bankroll", globals().get("bankroll", 100.0)), current_bankroll_value)
+
+if "bet_structure_df" not in globals():
+    try:
+        bet_structure_df = build_bet_structure_board(recommendations_df, current_bankroll_value)
+    except Exception:
+        bet_structure_df = pd.DataFrame()
+
+if "timing_board_df" not in globals():
+    try:
+        timing_board_df = build_timing_board(summary_df, recommendations_df)
+    except Exception:
+        timing_board_df = pd.DataFrame()
+
 
 tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Timing Engine", "Bet Structures", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger", "ROI Dashboard", "Bankroll Dashboard"])
 
