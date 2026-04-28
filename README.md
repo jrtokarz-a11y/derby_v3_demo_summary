@@ -1,18 +1,25 @@
-# Derby V3.7.1 Mode Fix
+# Derby V3.7.2 Track + Race Day Dropdowns
 
-Fixes:
-- NameError on provider = get_provider(mode)
-- Restores Data Source selector:
-  - Auto Real Data
-  - Demo
-- Adds visible current data source indicator
+Adds:
+- Race day preset dropdown
+  - Oaks Day
+  - Derby Day
+  - Today
+  - Tomorrow
+  - Custom
+- Track dropdown
+  - Churchill Downs
+  - Keeneland
+  - Saratoga
+  - Belmont at the Big A
+  - Gulfstream Park
+  - Santa Anita
+  - Del Mar
+  - Oaklawn Park
+  - Fair Grounds
+  - Tampa Bay Downs
+  - Custom
+- Auto date selection for Friday/Saturday presets
+- More track codes for Auto Real Data mode
 
-Update GitHub by replacing:
-- app.py
-- providers.py
-- real_scraper_provider.py
-- requirements.txt
-- README.md
-- reddit_signals.py
-
-Then reboot Streamlit.
+Note: Auto Real Data still depends on public entry pages being available and parseable.

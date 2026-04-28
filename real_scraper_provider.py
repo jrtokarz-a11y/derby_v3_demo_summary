@@ -15,6 +15,18 @@ TRACK_CODES = {
     "churchill downs": "CD",
     "churchill": "CD",
     "cd": "CD",
+    "keeneland": "KEE",
+    "saratoga": "SAR",
+    "belmont at the big a": "BAQ",
+    "belmont": "BEL",
+    "gulfstream park": "GP",
+    "gulfstream": "GP",
+    "santa anita": "SA",
+    "del mar": "DMR",
+    "oaklawn park": "OP",
+    "oaklawn": "OP",
+    "fair grounds": "FG",
+    "tampa bay downs": "TAM",
 }
 
 HEADERS = {

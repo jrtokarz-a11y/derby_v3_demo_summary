@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import os
 import time
 
@@ -118,11 +118,52 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3.7 - Auto Real Data Option 1")
+st.title("Derby V3.7.2 - Track + Race Day Dropdowns")
 st.markdown("<span class='animated-badge'>Race-day auto mode</span>", unsafe_allow_html=True)
 st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
 mode = "Demo"  # safe default
+
+RACE_DAY_PRESETS = {
+    "Oaks Day - Churchill Downs": {"track": "Churchill Downs", "date_offset": "friday"},
+    "Derby Day - Churchill Downs": {"track": "Churchill Downs", "date_offset": "saturday"},
+    "Today": {"track": "Churchill Downs", "date_offset": "today"},
+    "Tomorrow": {"track": "Churchill Downs", "date_offset": "tomorrow"},
+    "Custom": {"track": "Churchill Downs", "date_offset": "custom"},
+}
+
+TRACK_OPTIONS = [
+    "Churchill Downs",
+    "Keeneland",
+    "Saratoga",
+    "Belmont at the Big A",
+    "Gulfstream Park",
+    "Santa Anita",
+    "Del Mar",
+    "Oaklawn Park",
+    "Fair Grounds",
+    "Tampa Bay Downs",
+    "Custom"
+]
+
+def next_weekday(target_weekday: int):
+    today = date.today()
+    days_ahead = target_weekday - today.weekday()
+    if days_ahead < 0:
+        days_ahead += 7
+    return today + timedelta(days=days_ahead)
+
+def preset_date(offset: str):
+    if offset == "today":
+        return date.today()
+    if offset == "tomorrow":
+        return date.today() + timedelta(days=1)
+    if offset == "friday":
+        return next_weekday(4)
+    if offset == "saturday":
+        return next_weekday(5)
+    return date.today()
+
 
 with st.sidebar:
     animations_on = st.checkbox("Enable animations", value=True)
@@ -142,8 +183,24 @@ with st.sidebar:
         st.caption("Uses public Equibase-style entries when available; falls back to Demo if parsing fails.")
     else:
         st.caption("Demo mode uses simulated race card and odds.")
-    track = st.text_input("Track", "Churchill Downs")
-    race_date = st.date_input("Race date", value=date(2026, 5, 2))
+    st.header("Track / Race Day")
+    race_day_preset = st.selectbox("Race day preset", list(RACE_DAY_PRESETS.keys()), index=0)
+
+    track_choice = st.selectbox("Track", TRACK_OPTIONS, index=0)
+    if track_choice == "Custom":
+        track = st.text_input("Custom track name", "Churchill Downs")
+    else:
+        track = track_choice
+
+    preset = RACE_DAY_PRESETS[race_day_preset]
+    default_date = preset_date(preset["date_offset"])
+
+    if race_day_preset == "Custom":
+        race_date = st.date_input("Race date", value=date.today())
+    else:
+        race_date = st.date_input("Race date", value=default_date)
+
+    st.caption(f"Selected: {track} on {race_date}")
 
     st.header("Smart Reddit")
     use_reddit = st.checkbox("Enable Reddit layer", value=False)
