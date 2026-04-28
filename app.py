@@ -106,12 +106,17 @@ st.markdown("""
   font-weight:900;
   animation: fadeSlideUp .4s ease-out both;
 }
+.steam-strong {display:inline-block;border-radius:999px;padding:4px 10px;background:#0b6b28;color:white;font-weight:1000;margin:2px;animation:pulseGreen 1.8s infinite;}
+.steam {display:inline-block;border-radius:999px;padding:4px 10px;background:#d4edda;color:#155724;font-weight:900;margin:2px;}
+.drift {display:inline-block;border-radius:999px;padding:4px 10px;background:#f8d7da;color:#721c24;font-weight:900;margin:2px;animation:pulseYellow 2s infinite;}
+.stable {display:inline-block;border-radius:999px;padding:4px 10px;background:#e2e3e5;color:#383d41;font-weight:800;margin:2px;}
+.steam-card {border:2px solid #ddd;border-radius:14px;padding:12px;margin:8px 0;background:#fff;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3.4 - Animated Auto Recommender")
-st.markdown("<span class='animated-badge'>Animated weapon mode</span>", unsafe_allow_html=True)
-st.caption("Demo-only race model plus auto bet recommender, smart Reddit overlay, alerts, and animated cards.")
+st.title("Derby V3.5 - Steam Engine")
+st.markdown("<span class='animated-badge'>Steam engine mode</span>", unsafe_allow_html=True)
+st.caption("Demo-only race model plus auto recommender, smart Reddit overlay, sharp alerts, and steam/odds-movement detection.")
 
 with st.sidebar:
     animations_on = st.checkbox("Enable animations", value=True)
@@ -138,6 +143,13 @@ with st.sidebar:
     alert_sharp_low_hype = st.checkbox("Alert: sharp value + low hype", value=True)
     alert_public_traps = st.checkbox("Alert: public trap / fade risk", value=True)
     low_hype_threshold = st.slider("Low hype threshold %", 0, 60, 35, 5)
+
+    st.header("Steam Engine")
+    strong_steam_threshold = st.slider("Strong steam threshold %", 5, 50, 20, 5)
+    steam_threshold = st.slider("Steam threshold %", 3, 30, 10, 1)
+    drift_threshold = st.slider("Drift threshold %", 3, 40, 15, 1)
+    steam_boost = st.slider("Steam score boost", 0, 20, 8, 1)
+    drift_penalty = st.slider("Drift score penalty", 0, 25, 10, 1)
 
     st.header("Daily scan")
     auto_scan = st.checkbox("Auto-scan full card", False)
@@ -290,8 +302,40 @@ def build_daily_summary():
                 "Sharp/Public": top.get("sharp_public_signal", "Model only"),
                 "Sharp Low-Hype Alert": int(top.get("sharp_public_signal", "") == "Sharp value / low public buzz" and float(top.get("public_hype", 0)) * 100 <= low_hype_threshold),
                 "Public Trap Alert": int("trap" in str(top.get("sharp_public_signal", "")).lower()),
+                "Odds Move Raw": float(top.get("odds_change_pct", 0)),
             })
     return pd.DataFrame(rows)
+
+
+
+def classify_steam_from_move(move_pct: float) -> tuple[str, str]:
+    """
+    Uses odds_change_pct where negative means odds shortened (steam)
+    and positive means odds drifted.
+    """
+    try:
+        move_pct = float(move_pct)
+    except Exception:
+        move_pct = 0.0
+
+    if move_pct <= -(strong_steam_threshold / 100):
+        return "STRONG STEAM", "steam-strong"
+    if move_pct <= -(steam_threshold / 100):
+        return "STEAM", "steam"
+    if move_pct >= (drift_threshold / 100):
+        return "DRIFT", "drift"
+    return "STABLE", "stable"
+
+
+def enrich_summary_with_steam(summary_df: pd.DataFrame) -> pd.DataFrame:
+    df = summary_df.copy()
+    if "Odds Move Raw" not in df.columns:
+        df["Odds Move Raw"] = 0.0
+    labels = df["Odds Move Raw"].apply(classify_steam_from_move)
+    df["Steam Signal"] = labels.apply(lambda x: x[0])
+    df["Steam CSS"] = labels.apply(lambda x: x[1])
+    df["Odds Move %"] = (df["Odds Move Raw"].astype(float) * 100).round(1)
+    return df
 
 
 def build_auto_recommendations(summary_df: pd.DataFrame) -> pd.DataFrame:
@@ -313,6 +357,7 @@ def build_auto_recommendations(summary_df: pd.DataFrame) -> pd.DataFrame:
         trap = int(row.get("Public Trap Alert", 0))
         hype = float(row.get("Public Hype", 0))
         volatility = str(row.get("Volatility", ""))
+        steam_signal = str(row.get("Steam Signal", "STABLE"))
 
         score = ev + kelly * 0.5
         if tier == "GREEN+":
@@ -324,6 +369,12 @@ def build_auto_recommendations(summary_df: pd.DataFrame) -> pd.DataFrame:
 
         if sharp_alert:
             score += 10
+        if steam_signal in ["STRONG STEAM", "STEAM"] and tier in ["GREEN+", "GREEN"]:
+            score += steam_boost
+        if steam_signal == "STRONG STEAM" and sharp_alert:
+            score += 4
+        if steam_signal == "DRIFT":
+            score -= drift_penalty
         if trap:
             score -= 12
         if volatility == "HIGH":
@@ -336,16 +387,16 @@ def build_auto_recommendations(summary_df: pd.DataFrame) -> pd.DataFrame:
         bet_type = "PASS"
         reason = "No qualifying edge"
 
-        if tier == "GREEN+" and ev >= min_a_ev and sharp_alert and not trap:
+        if tier == "GREEN+" and ev >= min_a_ev and sharp_alert and not trap and steam_signal != "DRIFT":
             grade = "A"
             rec = "BET"
             bet_type = "WIN"
-            reason = "GREEN+ with sharp low-hype alert"
-        elif tier in ["GREEN+", "GREEN"] and ev >= min_b_ev and not trap:
+            reason = "GREEN+ with sharp low-hype alert; steam check passed"
+        elif tier in ["GREEN+", "GREEN"] and ev >= min_b_ev and not trap and steam_signal != "DRIFT":
             grade = "B"
             rec = "BET SMALL"
             bet_type = "WIN"
-            reason = "GREEN-tier value without trap signal"
+            reason = "GREEN-tier value without trap signal; no drift"
         elif tier == "YELLOW" and ev >= min_b_ev and sharp_alert and not trap:
             grade = "C"
             rec = "TINY EXACTA ONLY"
@@ -413,7 +464,7 @@ if manual_scan or "daily_summary" not in st.session_state:
 
 summary_df = st.session_state["daily_summary"]
 
-tabs = st.tabs(["Today's Plays", "Daily Summary", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
+tabs = st.tabs(["Today's Plays", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
 
 with tabs[0]:
     st.subheader("Daily card summary")
@@ -476,6 +527,28 @@ with tabs[0]:
     st.download_button("Download daily summary CSV", summary_df.to_csv(index=False).encode("utf-8"), "daily_summary.csv", "text/csv")
 
 with tabs[2]:
+    st.subheader("Steam / odds movement board")
+    st.caption("Negative odds move = odds shortened = steam. Positive odds move = drift.")
+    steam_counts = summary_df["Steam Signal"].value_counts() if "Steam Signal" in summary_df.columns else pd.Series(dtype=int)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Strong steam", int(steam_counts.get("STRONG STEAM", 0)))
+    c2.metric("Steam", int(steam_counts.get("STEAM", 0)))
+    c3.metric("Drift", int(steam_counts.get("DRIFT", 0)))
+    c4.metric("Stable", int(steam_counts.get("STABLE", 0)))
+
+    for _, row in summary_df.sort_values("Odds Move %").iterrows():
+        css = row.get("Steam CSS", "stable")
+        st.markdown(
+            f"<div class='steam-card'><span class='{css}'>{row.get('Steam Signal','STABLE')} {row.get('Odds Move %',0)}%</span> "
+            f"<b>Race {int(row['Race #'])}: {row['Best Horse']}</b> - {row['Tier']} - EV {row['EV %']}% - Odds {row['Odds']}<br>"
+            f"<span class='small-muted'>{row['Race']} - {row['Best Play']}</span></div>",
+            unsafe_allow_html=True,
+        )
+
+    steam_cols = ["Race #", "Race", "Best Horse", "Tier", "Best Play", "EV %", "Odds", "Steam Signal", "Odds Move %", "Sharp/Public", "Public Hype"]
+    st.dataframe(summary_df[[c for c in steam_cols if c in summary_df.columns]], use_container_width=True, hide_index=True)
+
+with tabs[3]:
     st.subheader("Locked-in best horses per race")
     st.caption("Phone-friendly view: best horse, confidence tier, suggested action, and Reddit overlay.")
 
@@ -496,6 +569,7 @@ with tabs[2]:
             f"<div><b>Final Call:</b> {row['Final Call']}</div>"
             f"<div><b>EV:</b> {row['EV %']}% | <b>Kelly:</b> {row['Kelly %']}% | <b>Odds:</b> {row['Odds']}</div>"
             f"<div><b>Reddit:</b> {row.get('Reddit','Off / none')} | <b>Mentions:</b> {row.get('Mentions',0)} | <b>Hype:</b> {row.get('Public Hype',0)}%</div>"
+            f"<div><b>Steam:</b> <span class='{row.get('Steam CSS','stable')}'>{row.get('Steam Signal','STABLE')} ({row.get('Odds Move %',0)}%)</span></div>"
             f"<div>{chip}</div>"
             f"<div><b>Pace:</b> {row['Pace']} | <b>Bias:</b> {row['Bias']}</div>"
             f"<div class='small-muted'>{row['Race']} - Post {row['Post']}</div>"
@@ -503,7 +577,7 @@ with tabs[2]:
         )
         st.markdown(html, unsafe_allow_html=True)
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Sharp value alert board")
     if "Sharp Low-Hype Alert" not in summary_df.columns:
         st.info("Run a scan first.")
@@ -522,7 +596,7 @@ with tabs[3]:
         if not len(sharp_alerts) and not len(trap_alerts):
             st.info("No sharp/public alerts found yet. Try enabling Reddit or lowering the low-hype threshold.")
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("Reddit signal board")
     if not use_reddit:
         st.info("Turn on 'Enable Reddit layer' in the sidebar.")
@@ -536,7 +610,7 @@ with tabs[4]:
         c1.metric("Sharp low-buzz spots", len(sharp))
         c2.metric("Public trap risks", len(traps))
 
-with tabs[5]:
+with tabs[6]:
     race_map = {f"Race {r.number} - {r.name} - {r.post_time}": r for r in races}
     selected = st.selectbox("Select race", list(race_map))
     race = race_map[selected]
@@ -553,12 +627,12 @@ with tabs[5]:
     css_map = {"GREEN+":"greenplus","GREEN":"green","YELLOW":"yellow","RED":"red","GRAY":"gray"}
     for _, r in rankings.iterrows():
         st.markdown(
-            f"<div class='{css_map.get(r['tier'], 'gray')}'>{r['runner']} - {r['confidence']} - EV {r['expected_value_pct']:.1f}% - Kelly {r['kelly_fraction_pct']:.1f}% - Reddit {r.get('reddit_signal','Off / none')} - {r.get('sharp_public_signal','Model only')}</div>",
+            f"<div class='{css_map.get(r['tier'], 'gray')}'>{r['runner']} - {r['confidence']} - EV {r['expected_value_pct']:.1f}% - Kelly {r['kelly_fraction_pct']:.1f}% - Move {r.get('movement_flag','STABLE')} {r.get('odds_change_pct_pct',0):.1f}% - Reddit {r.get('reddit_signal','Off / none')} - {r.get('sharp_public_signal','Model only')}</div>",
             unsafe_allow_html=True,
         )
 
     board_cols = [
-        "runner","tier","movement_flag","best_american_odds","market_fair_prob_pct","model_prob_pct",
+        "runner","tier","movement_flag","odds_change_pct_pct","best_american_odds","market_fair_prob_pct","model_prob_pct",
         "edge_prob_pct","expected_value_pct","kelly_fraction_pct","pace_engine_score","factor_score",
         "mentions","avg_sentiment","public_hype","reddit_signal","sharp_public_signal","books_seen"
     ]
@@ -590,11 +664,11 @@ with tabs[5]:
         st.write(", ".join(trifecta_horses))
         st.metric("Combos", trifecta_count(len(trifecta_horses)))
 
-with tabs[6]:
+with tabs[7]:
     st.subheader("Alert log")
     st.dataframe(load_alerts(200), use_container_width=True, hide_index=True)
 
-with tabs[7]:
+with tabs[8]:
     st.subheader("Odds history")
     race_map2 = {f"Race {r.number} - {r.name}": r for r in races}
     r2 = st.selectbox("Odds history race", list(race_map2), key="hist_race")
@@ -608,7 +682,7 @@ with tabs[7]:
         pivot = best.pivot(index="ts", columns="runner", values="american_odds")
         st.line_chart(pivot)
 
-with tabs[8]:
+with tabs[9]:
     st.subheader("Bet ledger with CLV")
     race_names = {f"Race {r.number} {r.name}": r for r in races}
     race_label = st.selectbox("Race for bet", list(race_names), key="bet_race")

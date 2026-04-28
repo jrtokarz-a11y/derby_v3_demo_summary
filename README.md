@@ -1,14 +1,15 @@
-# Derby V3.4 Animated Auto Recommender
+# Derby V3.5 Steam Engine
 
-Demo-only Streamlit app with animations.
+Demo-only Streamlit app with odds movement / steam detection.
 
 New:
-- Animated Today's Plays cards
-- Pulsing A-play and GREEN+ alerts
-- Hover effects
-- Shimmer suggested bet amounts
-- Fade-in daily summary cards
-- Animation toggle in sidebar
-- Balloons when new A-plays appear
+- Steam Board tab
+- STRONG STEAM / STEAM / DRIFT / STABLE labels
+- Steam boost in auto recommender
+- Drift penalty in auto recommender
+- Steam badges in Today's Plays
+- Steam display in Best Horses and Race Detail
+- Adjustable steam thresholds
 
-This app does not place bets. It is an analysis and discipline tool.
+Negative odds movement means odds shortened and may indicate steam.
+Positive odds movement means odds drifted.
