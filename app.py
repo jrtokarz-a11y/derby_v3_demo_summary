@@ -114,8 +114,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3.5 - Steam Engine")
-st.markdown("<span class='animated-badge'>Steam engine mode</span>", unsafe_allow_html=True)
+st.title("Derby V3.5.1 - Steam Engine Fix")
+st.markdown("<span class='animated-badge'>Steam engine mode - fixed</span>", unsafe_allow_html=True)
 st.caption("Demo-only race model plus auto recommender, smart Reddit overlay, sharp alerts, and steam/odds-movement detection.")
 
 with st.sidebar:
@@ -155,6 +155,12 @@ with st.sidebar:
     auto_scan = st.checkbox("Auto-scan full card", False)
     scan_seconds = st.slider("Scan every seconds", 15, 300, 60, 15)
     manual_scan = st.button("Scan full card now")
+    if st.button("Clear cache / refresh columns"):
+        st.cache_data.clear()
+        for key in ["daily_summary", "last_scan", "last_a_play_count"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
 
     st.header("Bankroll")
     bankroll = st.number_input("Bankroll", min_value=0.0, value=100.0, step=10.0)
@@ -329,12 +335,28 @@ def classify_steam_from_move(move_pct: float) -> tuple[str, str]:
 
 def enrich_summary_with_steam(summary_df: pd.DataFrame) -> pd.DataFrame:
     df = summary_df.copy()
+
+    # Defensive defaults so old cached summaries or partial scans never crash.
+    if df.empty:
+        for col, default in {
+            "Odds Move Raw": 0.0,
+            "Steam Signal": "STABLE",
+            "Steam CSS": "stable",
+            "Odds Move %": 0.0,
+        }.items():
+            df[col] = default
+        return df
+
     if "Odds Move Raw" not in df.columns:
         df["Odds Move Raw"] = 0.0
+
+    df["Odds Move Raw"] = pd.to_numeric(df["Odds Move Raw"], errors="coerce").fillna(0.0)
+
     labels = df["Odds Move Raw"].apply(classify_steam_from_move)
     df["Steam Signal"] = labels.apply(lambda x: x[0])
     df["Steam CSS"] = labels.apply(lambda x: x[1])
     df["Odds Move %"] = (df["Odds Move Raw"].astype(float) * 100).round(1)
+
     return df
 
 
@@ -535,6 +557,9 @@ with tabs[2]:
     c2.metric("Steam", int(steam_counts.get("STEAM", 0)))
     c3.metric("Drift", int(steam_counts.get("DRIFT", 0)))
     c4.metric("Stable", int(steam_counts.get("STABLE", 0)))
+
+    if "Odds Move %" not in summary_df.columns:
+        summary_df = enrich_summary_with_steam(summary_df)
 
     for _, row in summary_df.sort_values("Odds Move %").iterrows():
         css = row.get("Steam CSS", "stable")

@@ -1,15 +1,8 @@
-# Derby V3.5 Steam Engine
+# Derby V3.5.1 Steam Engine Fix
 
-Demo-only Streamlit app with odds movement / steam detection.
+Fixes:
+- KeyError: 'Odds Move %'
+- Steam Board now handles old cached summaries
+- Added Clear cache / refresh columns button
 
-New:
-- Steam Board tab
-- STRONG STEAM / STEAM / DRIFT / STABLE labels
-- Steam boost in auto recommender
-- Drift penalty in auto recommender
-- Steam badges in Today's Plays
-- Steam display in Best Horses and Race Detail
-- Adjustable steam thresholds
-
-Negative odds movement means odds shortened and may indicate steam.
-Positive odds movement means odds drifted.
+Update GitHub by replacing app.py plus normal support files, then reboot Streamlit.
