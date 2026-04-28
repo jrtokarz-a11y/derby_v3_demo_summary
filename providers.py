@@ -167,7 +167,12 @@ class LiveProvider:
         return pd.DataFrame()
 
 
+from real_scraper_provider import EquibaseOption1Provider
+
+
 def get_provider(mode: str):
+    if mode == "Auto Real Data":
+        return EquibaseOption1Provider()
     if mode == "CSV Import":
         return CsvProvider()
     if mode == "Live API":

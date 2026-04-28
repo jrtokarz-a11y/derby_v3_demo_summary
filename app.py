@@ -118,9 +118,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3.6 - Race Day Auto Mode")
+st.title("Derby V3.7 - Auto Real Data Option 1")
 st.markdown("<span class='animated-badge'>Race-day auto mode</span>", unsafe_allow_html=True)
-st.caption("Demo-only race model plus auto recommender, smart Reddit overlay, sharp alerts, and steam/odds-movement detection.")
+st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
 with st.sidebar:
     animations_on = st.checkbox("Enable animations", value=True)
@@ -199,10 +199,12 @@ with st.sidebar:
         "factor": st.slider("Factor blend", .1, .9, .42, .01),
     }
 
-provider = get_provider("Demo")
+provider = get_provider(mode)
 
 try:
     races = provider.races(track, str(race_date))
+    if mode == "Auto Real Data":
+        st.info("Auto Real Data is ON. If entries cannot be parsed from the public source, the app automatically falls back to demo data.")
 except Exception as exc:
     st.error(f"Data load failed: {exc}")
     st.stop()
@@ -804,7 +806,10 @@ with tabs[10]:
             st.markdown("### ROI by tier")
             st.dataframe(tier_df, use_container_width=True, hide_index=True)
 
-st.warning("Demo data is for testing only. Reddit is noisy and should be treated as a small sentiment overlay, not a primary betting signal.")
+if mode == "Auto Real Data":
+    st.warning("Auto Real Data uses public entries and morning-line odds when available. These are not guaranteed live tote odds. Verify final entries, scratches, and odds before betting.")
+else:
+    st.warning("Demo data is for testing only. Reddit is noisy and should be treated as a small sentiment overlay, not a primary betting signal.")
 
 
 # Auto-rerun heartbeat for race-day mode.

@@ -1,14 +1,13 @@
-# Derby V3.6 Race Day Auto Mode
+# Derby V3.7 Auto Real Data — Option 1
 
-Adds:
-- Auto-scan full card
-- Auto-refresh browser option
-- Last scan / next scan countdown
-- Race Day Alert Center
-- Live alert panel
-- A-play alerts
-- Strong steam alerts
-- GREEN + steam alerts
-- Clear cache / refresh columns button
+Adds an **Auto Real Data** mode:
 
-Important: this still uses Demo data unless you later connect a real odds feed.
+- Attempts to pull public Equibase-style entries
+- Uses morning-line odds when available
+- Automatically falls back to Demo if parsing fails
+- Keeps race-day auto scan, steam logic, Reddit overlay, recommendations, and alerts
+
+Important:
+- This does not bypass logins or paywalls.
+- Morning-line odds are not live tote odds.
+- Always verify final scratches, entries, and prices before betting.
