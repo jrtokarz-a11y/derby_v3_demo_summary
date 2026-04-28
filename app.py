@@ -9,7 +9,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from providers import get_provider
-from database import init_db, save_odds_snapshot, load_previous_best_odds, load_alerts, save_bet, load_bets, load_snapshots
+from database import init_db, save_odds_snapshot, load_previous_best_odds, load_alerts, save_bet, load_bets, load_snapshots, update_bet_result, delete_bet
 from model import analyze, final_call, exacta_legs, trifecta_count
 from reddit_signals import RedditSignalProvider
 from secrets_loader import load_streamlit_secrets_into_env
@@ -115,10 +115,13 @@ st.markdown("""
 .raceday-live {border-color:#0b6b28;background:#e9f7ef;}
 .raceday-alert {border-color:#721c24;background:#fdecea;color:#721c24;}
 .countdown {font-size:22px;font-weight:1000;}
+.roi-good {background:#d4edda;color:#155724;border-radius:12px;padding:10px;margin:6px 0;font-weight:900;}
+.roi-bad {background:#f8d7da;color:#721c24;border-radius:12px;padding:10px;margin:6px 0;font-weight:900;}
+.roi-neutral {background:#e2e3e5;color:#383d41;border-radius:12px;padding:10px;margin:6px 0;font-weight:900;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3.7.2 - Track + Race Day Dropdowns")
+st.title("Derby V3.8 - Results + ROI Dashboard")
 st.markdown("<span class='animated-badge'>Race-day auto mode</span>", unsafe_allow_html=True)
 st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
@@ -598,7 +601,68 @@ else:
 
 summary_df = st.session_state["daily_summary"]
 
-tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
+
+def american_profit(stake: float, odds: int) -> float:
+    stake = float(stake)
+    odds = int(odds)
+    if odds > 0:
+        return stake * odds / 100
+    if odds < 0:
+        return stake * 100 / abs(odds)
+    return 0.0
+
+
+def suggested_payout(stake: float, odds: int, result: str) -> float:
+    if result == "Won":
+        return round(float(stake) + american_profit(stake, odds), 2)
+    if result == "Lost":
+        return 0.0
+    return 0.0
+
+
+def performance_summary(bets: pd.DataFrame) -> dict:
+    if bets.empty:
+        return {
+            "bets": 0, "settled": 0, "stake": 0.0, "profit": 0.0,
+            "roi": 0.0, "win_rate": 0.0, "avg_clv": 0.0
+        }
+    settled = bets[bets["result"].isin(["Won", "Lost"])].copy()
+    stake = float(settled["stake"].sum()) if not settled.empty else 0.0
+    profit = float(settled["profit"].sum()) if not settled.empty else 0.0
+    roi = profit / stake * 100 if stake else 0.0
+    win_rate = (settled["result"].eq("Won").mean() * 100) if len(settled) else 0.0
+    avg_clv = float(settled["clv_points"].mean()) if "clv_points" in settled and len(settled) else 0.0
+    return {
+        "bets": len(bets),
+        "settled": len(settled),
+        "stake": stake,
+        "profit": profit,
+        "roi": roi,
+        "win_rate": win_rate,
+        "avg_clv": avg_clv,
+    }
+
+
+def grouped_roi(bets: pd.DataFrame, group_col: str) -> pd.DataFrame:
+    if bets.empty or group_col not in bets.columns:
+        return pd.DataFrame()
+    settled = bets[bets["result"].isin(["Won", "Lost"])].copy()
+    if settled.empty:
+        return pd.DataFrame()
+    out = settled.groupby(group_col, dropna=False).agg(
+        bets=("id", "count"),
+        stake=("stake", "sum"),
+        profit=("profit", "sum"),
+        avg_clv=("clv_points", "mean"),
+    ).reset_index()
+    out["roi_pct"] = (out["profit"] / out["stake"] * 100).round(1)
+    out["profit"] = out["profit"].round(2)
+    out["stake"] = out["stake"].round(2)
+    out["avg_clv"] = out["avg_clv"].round(1)
+    return out.sort_values("profit", ascending=False)
+
+
+tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger", "ROI Dashboard"])
 
 with tabs[0]:
     st.subheader("Daily card summary")
@@ -820,7 +884,38 @@ with tabs[9]:
         st.line_chart(pivot)
 
 with tabs[10]:
-    st.subheader("Bet ledger with CLV")
+    st.subheader("Bet Ledger + Result Settlement")
+
+    st.markdown("### Quick settle existing bet")
+    current_bets = load_bets()
+    if current_bets.empty:
+        st.caption("No bets to settle yet.")
+    else:
+        bet_options = {
+            f"#{int(row['id'])} - {row.get('race_name','')} - {row.get('horses','')} - ${row.get('stake',0)} - {row.get('result','')}" : int(row["id"])
+            for _, row in current_bets.iterrows()
+        }
+        selected_bet_label = st.selectbox("Select bet to settle/update", list(bet_options.keys()))
+        selected_bet_id = bet_options[selected_bet_label]
+        selected_row = current_bets[current_bets["id"] == selected_bet_id].iloc[0]
+
+        settle_result = st.selectbox("Set result", ["Pending", "Won", "Lost"], key="settle_result")
+        settle_closing_odds = st.number_input("Closing odds for CLV", value=int(selected_row.get("closing_odds", 0) or 0), step=10, key="settle_closing")
+        default_payout = suggested_payout(float(selected_row.get("stake", 0)), int(selected_row.get("odds_taken", 0)), settle_result)
+        settle_payout = st.number_input("Payout", min_value=0.0, value=float(default_payout), step=1.0, key="settle_payout")
+
+        col_settle, col_delete = st.columns(2)
+        with col_settle:
+            if st.button("Update selected bet"):
+                update_bet_result(selected_bet_id, settle_result, settle_payout, settle_closing_odds)
+                st.success("Bet updated. Refreshing...")
+                st.rerun()
+        with col_delete:
+            if st.button("Delete selected bet"):
+                delete_bet(selected_bet_id)
+                st.warning("Bet deleted. Refreshing...")
+                st.rerun()
+
     race_names = {f"Race {r.number} {r.name}": r for r in races}
     race_label = st.selectbox("Race for bet", list(race_names), key="bet_race")
     br = race_names[race_label]
@@ -874,7 +969,74 @@ with tabs[10]:
 if mode == "Auto Real Data":
     st.warning("Auto Real Data uses public entries and morning-line odds when available. These are not guaranteed live tote odds. Verify final entries, scratches, and odds before betting.")
 else:
-    st.warning("Demo data is for testing only. Reddit is noisy and should be treated as a small sentiment overlay, not a primary betting signal.")
+    
+
+with tabs[11]:
+    st.subheader("ROI Dashboard")
+    bets = load_bets()
+
+    if bets.empty:
+        st.info("No bets logged yet. Save bets in the Bet Ledger tab first.")
+    else:
+        summary = performance_summary(bets)
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Total bets", summary["bets"])
+        c2.metric("Settled bets", summary["settled"])
+        c3.metric("Total stake", f"${summary['stake']:.2f}")
+        c4.metric("Profit", f"${summary['profit']:.2f}")
+        c5.metric("ROI", f"{summary['roi']:.1f}%")
+
+        d1, d2 = st.columns(2)
+        d1.metric("Win rate", f"{summary['win_rate']:.1f}%")
+        d2.metric("Avg CLV points", f"{summary['avg_clv']:.1f}")
+
+        if summary["profit"] > 0:
+            st.markdown(f"<div class='roi-good'>Positive performance: +${summary['profit']:.2f} profit.</div>", unsafe_allow_html=True)
+        elif summary["profit"] < 0:
+            st.markdown(f"<div class='roi-bad'>Negative performance: ${summary['profit']:.2f}. Review signals before increasing stake.</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='roi-neutral'>Break-even or no settled results yet.</div>", unsafe_allow_html=True)
+
+        st.markdown("### ROI by tier")
+        tier_roi = grouped_roi(bets, "tier")
+        if tier_roi.empty:
+            st.info("No settled tier data yet.")
+        else:
+            st.dataframe(tier_roi, use_container_width=True, hide_index=True)
+            st.bar_chart(tier_roi.set_index("tier")[["roi_pct"]])
+
+        st.markdown("### ROI by bet type")
+        type_roi = grouped_roi(bets, "bet_type")
+        if type_roi.empty:
+            st.info("No settled bet type data yet.")
+        else:
+            st.dataframe(type_roi, use_container_width=True, hide_index=True)
+            st.bar_chart(type_roi.set_index("bet_type")[["roi_pct"]])
+
+        st.markdown("### ROI by track")
+        track_roi = grouped_roi(bets, "track")
+        if not track_roi.empty:
+            st.dataframe(track_roi, use_container_width=True, hide_index=True)
+
+        st.markdown("### ROI by race")
+        race_roi = grouped_roi(bets, "race_name")
+        if not race_roi.empty:
+            st.dataframe(race_roi, use_container_width=True, hide_index=True)
+
+        st.markdown("### CLV report")
+        settled = bets[bets["result"].isin(["Won", "Lost"])].copy()
+        if not settled.empty and "clv_points" in settled:
+            positive_clv = settled[settled["clv_points"] > 0]
+            negative_clv = settled[settled["clv_points"] < 0]
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Positive CLV bets", len(positive_clv))
+            p2.metric("Negative CLV bets", len(negative_clv))
+            p3.metric("CLV hit rate", f"{(len(positive_clv) / len(settled) * 100 if len(settled) else 0):.1f}%")
+            st.dataframe(settled[["date", "track", "race_name", "bet_type", "horses", "tier", "stake", "odds_taken", "closing_odds", "clv_points", "result", "profit"]], use_container_width=True, hide_index=True)
+
+        st.download_button("Download bet history CSV", bets.to_csv(index=False).encode("utf-8"), "bet_history_export.csv", "text/csv")
+
+st.warning("Demo data is for testing only. Reddit is noisy and should be treated as a small sentiment overlay, not a primary betting signal.")
 
 
 # Auto-rerun heartbeat for race-day mode.

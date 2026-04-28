@@ -137,3 +137,26 @@ def load_bets() -> pd.DataFrame:
 def load_snapshots(race_id: str) -> pd.DataFrame:
     with connect() as con:
         return pd.read_sql_query("SELECT * FROM odds_snapshots WHERE race_id = ? ORDER BY ts", con, params=(race_id,))
+
+
+def update_bet_result(bet_id: int, result: str, payout: float, closing_odds: int | None = None):
+    with connect() as con:
+        if closing_odds is None:
+            row = con.execute("SELECT odds_taken, stake FROM bets WHERE id = ?", (bet_id,)).fetchone()
+            closing_odds = 0
+        row = con.execute("SELECT odds_taken, stake FROM bets WHERE id = ?", (bet_id,)).fetchone()
+        odds_taken = int(row[0]) if row else 0
+        stake = float(row[1]) if row else 0.0
+        clv_points = int(closing_odds) - odds_taken if closing_odds else 0
+        profit = float(payout) - stake if result in ["Won", "Lost"] else 0.0
+        con.execute(
+            "UPDATE bets SET result = ?, payout = ?, closing_odds = ?, clv_points = ?, profit = ? WHERE id = ?",
+            (result, float(payout), int(closing_odds or 0), clv_points, profit, int(bet_id)),
+        )
+        con.commit()
+
+
+def delete_bet(bet_id: int):
+    with connect() as con:
+        con.execute("DELETE FROM bets WHERE id = ?", (int(bet_id),))
+        con.commit()
