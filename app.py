@@ -133,7 +133,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V4.0 - Bet Structure Engine")
+st.title("Derby V4.0.1 - Bet Structure Engine Fix")
 st.markdown("<span class='animated-badge'>Race-day auto mode</span>", unsafe_allow_html=True)
 st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
@@ -672,12 +672,13 @@ def current_bankroll_from_bets(starting_bankroll_value: float, bets: pd.DataFram
 
 
 def bankroll_health(starting_bankroll_value: float, current_bankroll_value: float) -> tuple[str, str]:
+    stop_loss = globals().get("daily_stop_loss_pct", 10)
     if starting_bankroll_value <= 0:
         return "Neutral", "bankroll-warn"
     change_pct = (current_bankroll_value - starting_bankroll_value) / starting_bankroll_value * 100
     if change_pct >= 5:
         return f"Healthy (+{change_pct:.1f}%)", "bankroll-good"
-    if change_pct <= -daily_stop_loss_pct:
+    if change_pct <= -stop_loss:
         return f"Stop-loss zone ({change_pct:.1f}%)", "bankroll-bad"
     if change_pct < 0:
         return f"Caution ({change_pct:.1f}%)", "bankroll-warn"
@@ -990,11 +991,23 @@ def build_bet_structure_board(recommendations_df: pd.DataFrame, current_bankroll
     return out
 
 
+# Safe defaults for bankroll display. This prevents NameError if a prior calculation branch fails.
+if "all_bets_for_bankroll" not in globals():
+    all_bets_for_bankroll = load_bets()
+if "current_bankroll_value" not in globals():
+    current_bankroll_value = current_bankroll_from_bets(globals().get("starting_bankroll", globals().get("bankroll", 100.0)), all_bets_for_bankroll)
+if "bankroll_status" not in globals() or "bankroll_css" not in globals():
+    bankroll_status, bankroll_css = bankroll_health(globals().get("starting_bankroll", globals().get("bankroll", 100.0)), current_bankroll_value)
+if "recommendations_df" in globals() and "apply_bankroll_engine" in globals():
+    recommendations_df = apply_bankroll_engine(recommendations_df, current_bankroll_value)
+if "bet_structure_df" not in globals() and "build_bet_structure_board" in globals() and "recommendations_df" in globals():
+    bet_structure_df = build_bet_structure_board(recommendations_df, current_bankroll_value)
+
 st.markdown(
     f"<div class='bankroll-card {bankroll_css}'>"
     f"<b>Bankroll Engine:</b> {bankroll_status}<br>"
-    f"Starting bankroll: ${starting_bankroll:.2f} | Current bankroll: ${current_bankroll_value:.2f}<br>"
-    f"Daily exposure cap: {max_daily_exposure_pct}% | Race cap: {max_race_exposure_pct}% | Stop-loss: {daily_stop_loss_pct}%"
+    f"Starting bankroll: ${globals().get('starting_bankroll', globals().get('bankroll', 100.0)):.2f} | Current bankroll: ${current_bankroll_value:.2f}<br>"
+    f"Daily exposure cap: {globals().get('max_daily_exposure_pct', 10)}% | Race cap: {globals().get('max_race_exposure_pct', 4)}% | Stop-loss: {globals().get('daily_stop_loss_pct', 10)}%"
     f"</div>",
     unsafe_allow_html=True,
 )
@@ -1289,7 +1302,7 @@ with tabs[13]:
     st.subheader("Bankroll Dashboard")
     bets = load_bets()
     current_bankroll_value = current_bankroll_from_bets(starting_bankroll, bets)
-    bankroll_status, bankroll_css = bankroll_health(starting_bankroll, current_bankroll_value)
+    bankroll_status, bankroll_css = bankroll_health(globals().get("starting_bankroll", globals().get("bankroll", 100.0)), current_bankroll_value)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Starting bankroll", f"${starting_bankroll:.2f}")

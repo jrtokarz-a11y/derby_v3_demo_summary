@@ -1,14 +1,12 @@
-# Derby V4.0 Bet Structure Engine
+# Derby V4.0.1 Bet Structure Engine Fix
 
-Adds:
-- Bet Structures tab
-- Chooses WIN / PLACE / SHOW
-- Chooses EXACTA BOX vs EXACTA KEY
-- Chooses TRIFECTA BOX vs TRIFECTA KEY
-- PASS when no affordable structure fits risk caps
-- Ticket cost calculation
-- Ticket lines formatted like a bet slip
-- Integrates with bankroll caps and daily exposure
-- Downloadable ticket board CSV
+Fixes:
+- NameError around bankroll_css / bankroll status card
+- Adds safe fallback bankroll values before rendering the UI
 
-This app still does not place bets. It recommends disciplined ticket structures.
+Keeps:
+- Bet Structure Engine
+- Bankroll Engine
+- ROI Dashboard
+- Auto Real Data / Demo modes
+- Race-day dropdowns
