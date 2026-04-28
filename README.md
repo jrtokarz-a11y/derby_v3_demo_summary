@@ -1,14 +1,15 @@
-# Derby V3.1 Smart Reddit - Cloud Ready
+# Derby V3.2 Sharp Alerts
 
-Demo-only Streamlit app with smart Reddit overlay:
+Demo-only Streamlit app with smart Reddit overlay and alerting:
 
-- Daily card summary
+- Daily summary
 - Best horse per race
-- Optional Reddit sentiment scan
-- Public hype and fade-risk flags
-- Sharp vs public divergence
+- Reddit sentiment scan
+- Public hype score
+- Sharp value + low public hype alerts
+- Public trap / fade-risk alerts
 - GREEN+ / GREEN / YELLOW / RED tiers
 - Pace engine
 - Bet ledger / ROI
 
-CSV Import and Live API modes remain removed.
+Use Reddit secrets in Streamlit Cloud if you want the Reddit layer enabled.

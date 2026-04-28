@@ -34,6 +34,9 @@ st.markdown("""
 .reddit-chip {display:inline-block;border-radius:999px;padding:3px 8px;background:#eef;margin:2px;font-size:12px;font-weight:800;}
 .fade-chip {display:inline-block;border-radius:999px;padding:3px 8px;background:#f8d7da;color:#721c24;margin:2px;font-size:12px;font-weight:900;}
 .sharp-chip {display:inline-block;border-radius:999px;padding:3px 8px;background:#d4edda;color:#155724;margin:2px;font-size:12px;font-weight:900;}
+.sharp-alert {border:3px solid #0b6b28;background:#d4edda;color:#155724;border-radius:14px;padding:14px;margin:10px 0;font-weight:900;}
+.trap-alert {border:3px solid #721c24;background:#f8d7da;color:#721c24;border-radius:14px;padding:14px;margin:10px 0;font-weight:900;}
+.alert-title {font-size:20px;font-weight:1000;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -51,6 +54,9 @@ with st.sidebar:
     subreddit_text = st.text_input("Subreddits", "horseracing,sportsbook,KentuckyDerby")
     reddit_limit = st.slider("Posts per subreddit", 25, 250, 75, 25)
     reddit_model_boost = st.slider("Reddit overlay influence", 0.0, 0.10, 0.03, 0.01)
+    alert_sharp_low_hype = st.checkbox("Alert: sharp value + low hype", value=True)
+    alert_public_traps = st.checkbox("Alert: public trap / fade risk", value=True)
+    low_hype_threshold = st.slider("Low hype threshold %", 0, 60, 35, 5)
 
     st.header("Daily scan")
     auto_scan = st.checkbox("Auto-scan full card", False)
@@ -197,6 +203,8 @@ def build_daily_summary():
                 "Mentions": int(top.get("mentions", 0)),
                 "Public Hype": round(float(top.get("public_hype", 0)) * 100, 0),
                 "Sharp/Public": top.get("sharp_public_signal", "Model only"),
+                "Sharp Low-Hype Alert": int(top.get("sharp_public_signal", "") == "Sharp value / low public buzz" and float(top.get("public_hype", 0)) * 100 <= low_hype_threshold),
+                "Public Trap Alert": int("trap" in str(top.get("sharp_public_signal", "")).lower()),
             })
     return pd.DataFrame(rows)
 
@@ -217,7 +225,7 @@ if manual_scan or "daily_summary" not in st.session_state:
 
 summary_df = st.session_state["daily_summary"]
 
-tabs = st.tabs(["Daily Summary", "Best Horses", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
+tabs = st.tabs(["Daily Summary", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
 
 with tabs[0]:
     st.subheader("Daily card summary")
@@ -239,6 +247,32 @@ with tabs[0]:
         st.success(f"Top playable race: Race {int(green_races.iloc[0]['Race #'])} - {green_races.iloc[0]['Best Horse']} ({green_races.iloc[0]['Tier']})")
     else:
         st.warning("No GREEN/GREEN+ race found. Best move may be to pass or only play tiny exactas.")
+
+    if alert_sharp_low_hype and "Sharp Low-Hype Alert" in summary_df.columns:
+        sharp_alerts = summary_df[summary_df["Sharp Low-Hype Alert"] == 1]
+        if len(sharp_alerts):
+            st.markdown("### Sharp value + low hype alerts")
+            for _, arow in sharp_alerts.iterrows():
+                st.markdown(
+                    f"<div class='sharp-alert'><div class='alert-title'>ACTIONABLE ALERT</div>"
+                    f"Race {int(arow['Race #'])}: {arow['Best Horse']} - {arow['Tier']}<br>"
+                    f"EV {arow['EV %']}% | Hype {arow.get('Public Hype', 0)}% | Odds {arow['Odds']}<br>"
+                    f"{arow['Sharp/Public']}</div>",
+                    unsafe_allow_html=True,
+                )
+
+    if alert_public_traps and "Public Trap Alert" in summary_df.columns:
+        trap_alerts = summary_df[summary_df["Public Trap Alert"] == 1]
+        if len(trap_alerts):
+            st.markdown("### Public trap / fade-risk alerts")
+            for _, trow in trap_alerts.iterrows():
+                st.markdown(
+                    f"<div class='trap-alert'><div class='alert-title'>FADE-RISK ALERT</div>"
+                    f"Race {int(trow['Race #'])}: {trow['Best Horse']}<br>"
+                    f"Hype {trow.get('Public Hype', 0)}% | Tier {trow['Tier']}<br>"
+                    f"{trow['Sharp/Public']}</div>",
+                    unsafe_allow_html=True,
+                )
 
     def style_summary(row):
         tier = row["Tier"]
@@ -282,6 +316,25 @@ with tabs[1]:
         st.markdown(html, unsafe_allow_html=True)
 
 with tabs[2]:
+    st.subheader("Sharp value alert board")
+    if "Sharp Low-Hype Alert" not in summary_df.columns:
+        st.info("Run a scan first.")
+    else:
+        sharp_alerts = summary_df[summary_df["Sharp Low-Hype Alert"] == 1]
+        trap_alerts = summary_df[summary_df["Public Trap Alert"] == 1]
+        c1, c2 = st.columns(2)
+        c1.metric("Sharp low-hype alerts", len(sharp_alerts))
+        c2.metric("Public trap alerts", len(trap_alerts))
+        if len(sharp_alerts):
+            st.markdown("### Best actionable alerts")
+            st.dataframe(sharp_alerts[["Race #", "Best Horse", "Tier", "Best Play", "EV %", "Kelly %", "Odds", "Public Hype", "Sharp/Public"]], use_container_width=True, hide_index=True)
+        if len(trap_alerts):
+            st.markdown("### Fade-risk alerts")
+            st.dataframe(trap_alerts[["Race #", "Best Horse", "Tier", "EV %", "Odds", "Public Hype", "Sharp/Public"]], use_container_width=True, hide_index=True)
+        if not len(sharp_alerts) and not len(trap_alerts):
+            st.info("No sharp/public alerts found yet. Try enabling Reddit or lowering the low-hype threshold.")
+
+with tabs[3]:
     st.subheader("Reddit signal board")
     if not use_reddit:
         st.info("Turn on 'Enable Reddit layer' in the sidebar.")
@@ -295,7 +348,7 @@ with tabs[2]:
         c1.metric("Sharp low-buzz spots", len(sharp))
         c2.metric("Public trap risks", len(traps))
 
-with tabs[3]:
+with tabs[4]:
     race_map = {f"Race {r.number} - {r.name} - {r.post_time}": r for r in races}
     selected = st.selectbox("Select race", list(race_map))
     race = race_map[selected]
@@ -349,11 +402,11 @@ with tabs[3]:
         st.write(", ".join(trifecta_horses))
         st.metric("Combos", trifecta_count(len(trifecta_horses)))
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("Alert log")
     st.dataframe(load_alerts(200), use_container_width=True, hide_index=True)
 
-with tabs[5]:
+with tabs[6]:
     st.subheader("Odds history")
     race_map2 = {f"Race {r.number} - {r.name}": r for r in races}
     r2 = st.selectbox("Odds history race", list(race_map2), key="hist_race")
@@ -367,7 +420,7 @@ with tabs[5]:
         pivot = best.pivot(index="ts", columns="runner", values="american_odds")
         st.line_chart(pivot)
 
-with tabs[6]:
+with tabs[7]:
     st.subheader("Bet ledger with CLV")
     race_names = {f"Race {r.number} {r.name}": r for r in races}
     race_label = st.selectbox("Race for bet", list(race_names), key="bet_race")
