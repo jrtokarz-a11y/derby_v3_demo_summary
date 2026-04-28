@@ -1,13 +1,18 @@
-# Derby V3.7 Auto Real Data — Option 1
+# Derby V3.7.1 Mode Fix
 
-Adds an **Auto Real Data** mode:
+Fixes:
+- NameError on provider = get_provider(mode)
+- Restores Data Source selector:
+  - Auto Real Data
+  - Demo
+- Adds visible current data source indicator
 
-- Attempts to pull public Equibase-style entries
-- Uses morning-line odds when available
-- Automatically falls back to Demo if parsing fails
-- Keeps race-day auto scan, steam logic, Reddit overlay, recommendations, and alerts
+Update GitHub by replacing:
+- app.py
+- providers.py
+- real_scraper_provider.py
+- requirements.txt
+- README.md
+- reddit_signals.py
 
-Important:
-- This does not bypass logins or paywalls.
-- Morning-line odds are not live tote odds.
-- Always verify final scratches, entries, and prices before betting.
+Then reboot Streamlit.

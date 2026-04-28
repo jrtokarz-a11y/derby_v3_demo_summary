@@ -122,6 +122,8 @@ st.title("Derby V3.7 - Auto Real Data Option 1")
 st.markdown("<span class='animated-badge'>Race-day auto mode</span>", unsafe_allow_html=True)
 st.caption("Auto race-card mode using public entries + morning-line odds fallback, with auto recommender, Reddit overlay, sharp alerts, and steam logic.")
 
+mode = "Demo"  # safe default
+
 with st.sidebar:
     animations_on = st.checkbox("Enable animations", value=True)
     if not animations_on:
@@ -134,8 +136,12 @@ with st.sidebar:
         </style>
         """, unsafe_allow_html=True)
 
-    st.header("Demo mode")
-    st.markdown("**Data source: Demo only**")
+    st.header("Data mode")
+    mode = st.radio("Data source", ["Auto Real Data", "Demo"], index=0)
+    if mode == "Auto Real Data":
+        st.caption("Uses public Equibase-style entries when available; falls back to Demo if parsing fails.")
+    else:
+        st.caption("Demo mode uses simulated race card and odds.")
     track = st.text_input("Track", "Churchill Downs")
     race_date = st.date_input("Race date", value=date(2026, 5, 2))
 
@@ -199,7 +205,9 @@ with st.sidebar:
         "factor": st.slider("Factor blend", .1, .9, .42, .01),
     }
 
-provider = get_provider(mode)
+provider = get_provider(mode if "mode" in globals() else "Demo")
+
+st.info(f"Current data source: {mode}")
 
 try:
     races = provider.races(track, str(race_date))
