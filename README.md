@@ -1,15 +1,14 @@
-# Derby V3.2 Sharp Alerts
+# Derby V3.3 Auto Bet Recommender
 
-Demo-only Streamlit app with smart Reddit overlay and alerting:
+Demo-only Streamlit app with smart Reddit overlay plus an auto bet recommender.
 
-- Daily summary
-- Best horse per race
-- Reddit sentiment scan
-- Public hype score
-- Sharp value + low public hype alerts
-- Public trap / fade-risk alerts
-- GREEN+ / GREEN / YELLOW / RED tiers
-- Pace engine
-- Bet ledger / ROI
+New:
+- Today's Plays tab
+- BET / BET SMALL / TINY EXACTA / PASS logic
+- A/B/C play grading
+- Max recommended bets per day
+- Daily bankroll risk cap
+- Suggested wager sizing
+- Full recommendation board
 
-Use Reddit secrets in Streamlit Cloud if you want the Reddit layer enabled.
+This app does not place bets. It is an analysis and discipline tool.

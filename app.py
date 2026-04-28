@@ -37,6 +37,13 @@ st.markdown("""
 .sharp-alert {border:3px solid #0b6b28;background:#d4edda;color:#155724;border-radius:14px;padding:14px;margin:10px 0;font-weight:900;}
 .trap-alert {border:3px solid #721c24;background:#f8d7da;color:#721c24;border-radius:14px;padding:14px;margin:10px 0;font-weight:900;}
 .alert-title {font-size:20px;font-weight:1000;}
+.play-card {border:3px solid #111;border-radius:16px;padding:16px;margin:12px 0;background:#ffffff;}
+.play-a {border-color:#0b6b28;background:#e9f7ef;}
+.play-b {border-color:#856404;background:#fff8dc;}
+.play-pass {border-color:#721c24;background:#fdecea;}
+.play-title {font-size:22px;font-weight:1000;}
+.play-meta {font-size:14px;color:#333;margin-top:4px;}
+.bet-amount {font-size:28px;font-weight:1000;color:#0b6b28;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -68,6 +75,10 @@ with st.sidebar:
     unit = st.number_input("Exotic unit", min_value=0.10, value=1.0, step=.5)
     kelly_mult = st.slider("Kelly fraction", .05, 1.0, .25, .05)
     max_win_pct = st.slider("Max win bet % bankroll", .005, .10, .03, .005)
+    max_daily_bets = st.slider("Max recommended bets/day", 1, 6, 3, 1)
+    min_a_ev = st.slider("A-play min EV %", 5, 30, 10, 1)
+    min_b_ev = st.slider("B-play min EV %", 1, 20, 6, 1)
+    max_total_daily_risk_pct = st.slider("Max total daily risk % bankroll", 1, 25, 8, 1)
 
     st.header("Model weights")
     weights = {
@@ -208,6 +219,109 @@ def build_daily_summary():
             })
     return pd.DataFrame(rows)
 
+
+def build_auto_recommendations(summary_df: pd.DataFrame) -> pd.DataFrame:
+    if summary_df.empty:
+        return pd.DataFrame()
+
+    plays = summary_df.copy()
+    plays["Recommendation"] = "PASS"
+    plays["Play Grade"] = "PASS"
+    plays["Bet Type"] = "PASS"
+    plays["Reason"] = "No qualifying edge"
+    plays["Raw Score"] = 0.0
+
+    for idx, row in plays.iterrows():
+        tier = row["Tier"]
+        ev = float(row["EV %"])
+        kelly = float(row["Kelly %"])
+        sharp_alert = int(row.get("Sharp Low-Hype Alert", 0))
+        trap = int(row.get("Public Trap Alert", 0))
+        hype = float(row.get("Public Hype", 0))
+        volatility = str(row.get("Volatility", ""))
+
+        score = ev + kelly * 0.5
+        if tier == "GREEN+":
+            score += 12
+        elif tier == "GREEN":
+            score += 7
+        elif tier == "YELLOW":
+            score += 1
+
+        if sharp_alert:
+            score += 10
+        if trap:
+            score -= 12
+        if volatility == "HIGH":
+            score -= 4
+        if hype >= 75 and tier not in ["GREEN+", "GREEN"]:
+            score -= 6
+
+        grade = "PASS"
+        rec = "PASS"
+        bet_type = "PASS"
+        reason = "No qualifying edge"
+
+        if tier == "GREEN+" and ev >= min_a_ev and sharp_alert and not trap:
+            grade = "A"
+            rec = "BET"
+            bet_type = "WIN"
+            reason = "GREEN+ with sharp low-hype alert"
+        elif tier in ["GREEN+", "GREEN"] and ev >= min_b_ev and not trap:
+            grade = "B"
+            rec = "BET SMALL"
+            bet_type = "WIN"
+            reason = "GREEN-tier value without trap signal"
+        elif tier == "YELLOW" and ev >= min_b_ev and sharp_alert and not trap:
+            grade = "C"
+            rec = "TINY EXACTA ONLY"
+            bet_type = "EXACTA"
+            reason = "Small edge with sharp/public divergence"
+
+        if volatility == "HIGH" and grade not in ["A"]:
+            grade = "PASS"
+            rec = "PASS"
+            bet_type = "PASS"
+            reason = "High volatility filter"
+
+        plays.at[idx, "Raw Score"] = score
+        plays.at[idx, "Play Grade"] = grade
+        plays.at[idx, "Recommendation"] = rec
+        plays.at[idx, "Bet Type"] = bet_type
+        plays.at[idx, "Reason"] = reason
+
+    plays = plays.sort_values("Raw Score", ascending=False).reset_index(drop=True)
+
+    eligible = plays[plays["Recommendation"] != "PASS"].head(max_daily_bets).copy()
+    if eligible.empty:
+        plays["Suggested Bet $"] = 0.0
+        return plays
+
+    daily_cap = bankroll * (max_total_daily_risk_pct / 100)
+    suggested = []
+    for _, row in eligible.iterrows():
+        kelly_frac = max(float(row["Kelly %"]) / 100, 0)
+        if row["Play Grade"] == "A":
+            amt = bankroll * kelly_frac * kelly_mult
+        elif row["Play Grade"] == "B":
+            amt = bankroll * kelly_frac * kelly_mult * 0.5
+        else:
+            amt = unit
+
+        amt = min(amt, bankroll * max_win_pct)
+        suggested.append(max(round(amt, 2), 0))
+
+    total_suggested = sum(suggested)
+    if total_suggested > daily_cap and total_suggested > 0:
+        scale = daily_cap / total_suggested
+        suggested = [round(x * scale, 2) for x in suggested]
+
+    plays["Suggested Bet $"] = 0.0
+    for pos, idx in enumerate(eligible.index):
+        plays.at[idx, "Suggested Bet $"] = suggested[pos]
+
+    return plays
+
 if use_reddit and not has_reddit_credentials():
     st.warning("Reddit layer is ON, but Reddit credentials are missing. Add them in Streamlit Secrets or turn Reddit OFF.")
 
@@ -225,7 +339,7 @@ if manual_scan or "daily_summary" not in st.session_state:
 
 summary_df = st.session_state["daily_summary"]
 
-tabs = st.tabs(["Daily Summary", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
+tabs = st.tabs(["Today's Plays", "Daily Summary", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
 
 with tabs[0]:
     st.subheader("Daily card summary")
@@ -287,7 +401,7 @@ with tabs[0]:
     st.dataframe(summary_df.style.apply(style_summary, axis=1), use_container_width=True, hide_index=True)
     st.download_button("Download daily summary CSV", summary_df.to_csv(index=False).encode("utf-8"), "daily_summary.csv", "text/csv")
 
-with tabs[1]:
+with tabs[2]:
     st.subheader("Locked-in best horses per race")
     st.caption("Phone-friendly view: best horse, confidence tier, suggested action, and Reddit overlay.")
 
@@ -315,7 +429,7 @@ with tabs[1]:
         )
         st.markdown(html, unsafe_allow_html=True)
 
-with tabs[2]:
+with tabs[3]:
     st.subheader("Sharp value alert board")
     if "Sharp Low-Hype Alert" not in summary_df.columns:
         st.info("Run a scan first.")
@@ -334,7 +448,7 @@ with tabs[2]:
         if not len(sharp_alerts) and not len(trap_alerts):
             st.info("No sharp/public alerts found yet. Try enabling Reddit or lowering the low-hype threshold.")
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Reddit signal board")
     if not use_reddit:
         st.info("Turn on 'Enable Reddit layer' in the sidebar.")
@@ -348,7 +462,7 @@ with tabs[3]:
         c1.metric("Sharp low-buzz spots", len(sharp))
         c2.metric("Public trap risks", len(traps))
 
-with tabs[4]:
+with tabs[5]:
     race_map = {f"Race {r.number} - {r.name} - {r.post_time}": r for r in races}
     selected = st.selectbox("Select race", list(race_map))
     race = race_map[selected]
@@ -402,11 +516,11 @@ with tabs[4]:
         st.write(", ".join(trifecta_horses))
         st.metric("Combos", trifecta_count(len(trifecta_horses)))
 
-with tabs[5]:
+with tabs[6]:
     st.subheader("Alert log")
     st.dataframe(load_alerts(200), use_container_width=True, hide_index=True)
 
-with tabs[6]:
+with tabs[7]:
     st.subheader("Odds history")
     race_map2 = {f"Race {r.number} - {r.name}": r for r in races}
     r2 = st.selectbox("Odds history race", list(race_map2), key="hist_race")
@@ -420,7 +534,7 @@ with tabs[6]:
         pivot = best.pivot(index="ts", columns="runner", values="american_odds")
         st.line_chart(pivot)
 
-with tabs[7]:
+with tabs[8]:
     st.subheader("Bet ledger with CLV")
     race_names = {f"Race {r.number} {r.name}": r for r in races}
     race_label = st.selectbox("Race for bet", list(race_names), key="bet_race")
