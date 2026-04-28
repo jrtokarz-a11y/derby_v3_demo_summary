@@ -44,13 +44,87 @@ st.markdown("""
 .play-title {font-size:22px;font-weight:1000;}
 .play-meta {font-size:14px;color:#333;margin-top:4px;}
 .bet-amount {font-size:28px;font-weight:1000;color:#0b6b28;}
+
+@keyframes fadeSlideUp {
+  0% {opacity:0; transform:translateY(18px);}
+  100% {opacity:1; transform:translateY(0);}
+}
+@keyframes pulseGreen {
+  0% {box-shadow:0 0 0 0 rgba(11,107,40,.65);}
+  70% {box-shadow:0 0 0 14px rgba(11,107,40,0);}
+  100% {box-shadow:0 0 0 0 rgba(11,107,40,0);}
+}
+@keyframes pulseYellow {
+  0% {box-shadow:0 0 0 0 rgba(133,100,4,.55);}
+  70% {box-shadow:0 0 0 12px rgba(133,100,4,0);}
+  100% {box-shadow:0 0 0 0 rgba(133,100,4,0);}
+}
+@keyframes shimmer {
+  0% {background-position:-300px 0;}
+  100% {background-position:300px 0;}
+}
+@keyframes glowText {
+  0%,100% {text-shadow:0 0 0 rgba(11,107,40,0);}
+  50% {text-shadow:0 0 10px rgba(11,107,40,.45);}
+}
+
+.greenplus, .green, .yellow, .red, .gray, .summary-card, .play-card, .sharp-alert, .trap-alert {
+  animation: fadeSlideUp .45s ease-out both;
+}
+.greenplus {
+  animation: fadeSlideUp .45s ease-out both, pulseGreen 2s infinite;
+}
+.play-a {
+  animation: fadeSlideUp .45s ease-out both, pulseGreen 2.2s infinite;
+}
+.play-b {
+  animation: fadeSlideUp .45s ease-out both, pulseYellow 2.8s infinite;
+}
+.play-card, .summary-card {
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.play-card:hover, .summary-card:hover {
+  transform: translateY(-3px) scale(1.01);
+  box-shadow: 0 10px 24px rgba(0,0,0,.12);
+}
+.play-title, .big-horse {
+  animation: glowText 2.6s ease-in-out infinite;
+}
+.bet-amount {
+  background: linear-gradient(90deg, #0b6b28, #179447, #0b6b28);
+  -webkit-background-clip: text;
+  color: transparent;
+  background-size: 300px 100%;
+  animation: shimmer 2.4s linear infinite;
+}
+.animated-badge {
+  display:inline-block;
+  border-radius:999px;
+  padding:4px 10px;
+  background:#111;
+  color:#fff;
+  font-weight:900;
+  animation: fadeSlideUp .4s ease-out both;
+}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3.1 - Demo + Smart Reddit Layer")
-st.caption("Demo-only race model plus optional Reddit sentiment, public hype, fade risk, and sharp/public divergence.")
+st.title("Derby V3.4 - Animated Auto Recommender")
+st.markdown("<span class='animated-badge'>Animated weapon mode</span>", unsafe_allow_html=True)
+st.caption("Demo-only race model plus auto bet recommender, smart Reddit overlay, alerts, and animated cards.")
 
 with st.sidebar:
+    animations_on = st.checkbox("Enable animations", value=True)
+    if not animations_on:
+        st.markdown("""
+        <style>
+        *, *::before, *::after {
+          animation: none !important;
+          transition: none !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
     st.header("Demo mode")
     st.markdown("**Data source: Demo only**")
     track = st.text_input("Track", "Churchill Downs")
