@@ -111,11 +111,15 @@ st.markdown("""
 .drift {display:inline-block;border-radius:999px;padding:4px 10px;background:#f8d7da;color:#721c24;font-weight:900;margin:2px;animation:pulseYellow 2s infinite;}
 .stable {display:inline-block;border-radius:999px;padding:4px 10px;background:#e2e3e5;color:#383d41;font-weight:800;margin:2px;}
 .steam-card {border:2px solid #ddd;border-radius:14px;padding:12px;margin:8px 0;background:#fff;}
+.raceday-panel {border:3px solid #111;border-radius:16px;padding:14px;margin:10px 0;background:#f7f7f7;}
+.raceday-live {border-color:#0b6b28;background:#e9f7ef;}
+.raceday-alert {border-color:#721c24;background:#fdecea;color:#721c24;}
+.countdown {font-size:22px;font-weight:1000;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("Derby V3.5.1 - Steam Engine Fix")
-st.markdown("<span class='animated-badge'>Steam engine mode - fixed</span>", unsafe_allow_html=True)
+st.title("Derby V3.6 - Race Day Auto Mode")
+st.markdown("<span class='animated-badge'>Race-day auto mode</span>", unsafe_allow_html=True)
 st.caption("Demo-only race model plus auto recommender, smart Reddit overlay, sharp alerts, and steam/odds-movement detection.")
 
 with st.sidebar:
@@ -151,13 +155,14 @@ with st.sidebar:
     steam_boost = st.slider("Steam score boost", 0, 20, 8, 1)
     drift_penalty = st.slider("Drift score penalty", 0, 25, 10, 1)
 
-    st.header("Daily scan")
-    auto_scan = st.checkbox("Auto-scan full card", False)
+    st.header("Race Day Auto Mode")
+    auto_scan = st.checkbox("Auto-scan full card", True)
     scan_seconds = st.slider("Scan every seconds", 15, 300, 60, 15)
+    auto_rerun = st.checkbox("Auto-refresh browser", True)
     manual_scan = st.button("Scan full card now")
     if st.button("Clear cache / refresh columns"):
         st.cache_data.clear()
-        for key in ["daily_summary", "last_scan", "last_a_play_count"]:
+        for key in ["daily_summary", "last_scan", "last_scan_time", "last_a_play_count", "auto_alerts"]:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
@@ -171,6 +176,11 @@ with st.sidebar:
     min_a_ev = st.slider("A-play min EV %", 5, 30, 10, 1)
     min_b_ev = st.slider("B-play min EV %", 1, 20, 6, 1)
     max_total_daily_risk_pct = st.slider("Max total daily risk % bankroll", 1, 25, 8, 1)
+
+    st.header("Race Day Alerts")
+    alert_a_play = st.checkbox("Alert on A play", True)
+    alert_strong_steam = st.checkbox("Alert on strong steam", True)
+    alert_green_steam = st.checkbox("Alert on GREEN + steam", True)
 
     st.header("Model weights")
     weights = {
@@ -360,6 +370,31 @@ def enrich_summary_with_steam(summary_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+
+def build_raceday_alerts(summary_df: pd.DataFrame, recommendations_df: pd.DataFrame) -> list[str]:
+    alerts = []
+
+    if recommendations_df is not None and not recommendations_df.empty and alert_a_play:
+        a_plays = recommendations_df[recommendations_df.get("Play Grade", "") == "A"]
+        for _, row in a_plays.iterrows():
+            alerts.append(f"A PLAY: Race {int(row['Race #'])} - {row['Best Horse']} - {row.get('Bet Type', 'WIN')} - Suggested ${row.get('Suggested Bet $', 0):.2f}")
+
+    if "Steam Signal" in summary_df.columns and alert_strong_steam:
+        strong = summary_df[summary_df["Steam Signal"] == "STRONG STEAM"]
+        for _, row in strong.iterrows():
+            alerts.append(f"STRONG STEAM: Race {int(row['Race #'])} - {row['Best Horse']} - Move {row.get('Odds Move %', 0)}%")
+
+    if "Steam Signal" in summary_df.columns and alert_green_steam:
+        green_steam = summary_df[
+            summary_df["Tier"].isin(["GREEN+", "GREEN"]) &
+            summary_df["Steam Signal"].isin(["STRONG STEAM", "STEAM"])
+        ]
+        for _, row in green_steam.iterrows():
+            alerts.append(f"GREEN + STEAM: Race {int(row['Race #'])} - {row['Best Horse']} - {row['Tier']} - {row['Steam Signal']}")
+
+    return alerts
+
+
 def build_auto_recommendations(summary_df: pd.DataFrame) -> pd.DataFrame:
     if summary_df.empty:
         return pd.DataFrame()
@@ -472,21 +507,31 @@ def build_auto_recommendations(summary_df: pd.DataFrame) -> pd.DataFrame:
 if use_reddit and not has_reddit_credentials():
     st.warning("Reddit layer is ON, but Reddit credentials are missing. Add them in Streamlit Secrets or turn Reddit OFF.")
 
-if auto_scan:
-    now = time.time()
-    if "last_scan" not in st.session_state:
-        st.session_state.last_scan = 0
-    if now - st.session_state.last_scan >= scan_seconds:
-        st.session_state.last_scan = now
-        st.session_state["daily_summary"] = build_daily_summary()
-        st.rerun()
+# V3.6 race-day scanning loop
+now = time.time()
+if "last_scan" not in st.session_state:
+    st.session_state.last_scan = 0
+if "last_scan_time" not in st.session_state:
+    st.session_state.last_scan_time = "Never"
 
-if manual_scan or "daily_summary" not in st.session_state:
+should_scan = manual_scan or "daily_summary" not in st.session_state
+
+if auto_scan and (now - st.session_state.last_scan >= scan_seconds):
+    should_scan = True
+
+if should_scan:
+    st.session_state.last_scan = now
+    st.session_state.last_scan_time = datetime.now().strftime("%H:%M:%S")
     st.session_state["daily_summary"] = build_daily_summary()
+
+if auto_scan and auto_rerun:
+    seconds_left = max(0, int(scan_seconds - (time.time() - st.session_state.last_scan)))
+else:
+    seconds_left = None
 
 summary_df = st.session_state["daily_summary"]
 
-tabs = st.tabs(["Today's Plays", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
+tabs = st.tabs(["Race Day Alerts", "Today's Plays", "Daily Summary", "Steam Board", "Best Horses", "Sharp Alerts", "Reddit Signals", "Race Detail", "Alerts", "Odds History", "Bet Ledger / ROI"])
 
 with tabs[0]:
     st.subheader("Daily card summary")
@@ -548,7 +593,7 @@ with tabs[0]:
     st.dataframe(summary_df.style.apply(style_summary, axis=1), use_container_width=True, hide_index=True)
     st.download_button("Download daily summary CSV", summary_df.to_csv(index=False).encode("utf-8"), "daily_summary.csv", "text/csv")
 
-with tabs[2]:
+with tabs[3]:
     st.subheader("Steam / odds movement board")
     st.caption("Negative odds move = odds shortened = steam. Positive odds move = drift.")
     steam_counts = summary_df["Steam Signal"].value_counts() if "Steam Signal" in summary_df.columns else pd.Series(dtype=int)
@@ -573,7 +618,7 @@ with tabs[2]:
     steam_cols = ["Race #", "Race", "Best Horse", "Tier", "Best Play", "EV %", "Odds", "Steam Signal", "Odds Move %", "Sharp/Public", "Public Hype"]
     st.dataframe(summary_df[[c for c in steam_cols if c in summary_df.columns]], use_container_width=True, hide_index=True)
 
-with tabs[3]:
+with tabs[4]:
     st.subheader("Locked-in best horses per race")
     st.caption("Phone-friendly view: best horse, confidence tier, suggested action, and Reddit overlay.")
 
@@ -602,7 +647,7 @@ with tabs[3]:
         )
         st.markdown(html, unsafe_allow_html=True)
 
-with tabs[4]:
+with tabs[5]:
     st.subheader("Sharp value alert board")
     if "Sharp Low-Hype Alert" not in summary_df.columns:
         st.info("Run a scan first.")
@@ -621,7 +666,7 @@ with tabs[4]:
         if not len(sharp_alerts) and not len(trap_alerts):
             st.info("No sharp/public alerts found yet. Try enabling Reddit or lowering the low-hype threshold.")
 
-with tabs[5]:
+with tabs[6]:
     st.subheader("Reddit signal board")
     if not use_reddit:
         st.info("Turn on 'Enable Reddit layer' in the sidebar.")
@@ -635,7 +680,7 @@ with tabs[5]:
         c1.metric("Sharp low-buzz spots", len(sharp))
         c2.metric("Public trap risks", len(traps))
 
-with tabs[6]:
+with tabs[7]:
     race_map = {f"Race {r.number} - {r.name} - {r.post_time}": r for r in races}
     selected = st.selectbox("Select race", list(race_map))
     race = race_map[selected]
@@ -689,11 +734,11 @@ with tabs[6]:
         st.write(", ".join(trifecta_horses))
         st.metric("Combos", trifecta_count(len(trifecta_horses)))
 
-with tabs[7]:
+with tabs[8]:
     st.subheader("Alert log")
     st.dataframe(load_alerts(200), use_container_width=True, hide_index=True)
 
-with tabs[8]:
+with tabs[9]:
     st.subheader("Odds history")
     race_map2 = {f"Race {r.number} - {r.name}": r for r in races}
     r2 = st.selectbox("Odds history race", list(race_map2), key="hist_race")
@@ -707,7 +752,7 @@ with tabs[8]:
         pivot = best.pivot(index="ts", columns="runner", values="american_odds")
         st.line_chart(pivot)
 
-with tabs[9]:
+with tabs[10]:
     st.subheader("Bet ledger with CLV")
     race_names = {f"Race {r.number} {r.name}": r for r in races}
     race_label = st.selectbox("Race for bet", list(race_names), key="bet_race")
@@ -760,3 +805,10 @@ with tabs[9]:
             st.dataframe(tier_df, use_container_width=True, hide_index=True)
 
 st.warning("Demo data is for testing only. Reddit is noisy and should be treated as a small sentiment overlay, not a primary betting signal.")
+
+
+# Auto-rerun heartbeat for race-day mode.
+if auto_scan and auto_rerun:
+    time.sleep(1)
+    if time.time() - st.session_state.last_scan >= scan_seconds:
+        st.rerun()

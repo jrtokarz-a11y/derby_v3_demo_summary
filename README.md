@@ -1,8 +1,14 @@
-# Derby V3.5.1 Steam Engine Fix
+# Derby V3.6 Race Day Auto Mode
 
-Fixes:
-- KeyError: 'Odds Move %'
-- Steam Board now handles old cached summaries
-- Added Clear cache / refresh columns button
+Adds:
+- Auto-scan full card
+- Auto-refresh browser option
+- Last scan / next scan countdown
+- Race Day Alert Center
+- Live alert panel
+- A-play alerts
+- Strong steam alerts
+- GREEN + steam alerts
+- Clear cache / refresh columns button
 
-Update GitHub by replacing app.py plus normal support files, then reboot Streamlit.
+Important: this still uses Demo data unless you later connect a real odds feed.
