@@ -1,35 +1,39 @@
-# Derby V4.2 Live Odds API Connector
+# Derby Final Clean Version
 
-Adds:
-- Live Odds API data mode
-- Streamlit Secrets support
-- Generic API adapter
-- Live provider status check
-- Racecards endpoint support
-- Odds endpoint support
-- Graceful fallback to Demo if API fails
+This is the clean final package.
 
-## Required secrets
+Includes:
+- Track dropdowns
+- Race day presets
+- Oaks Day fallback card
+- Derby Day fallback card
+- REAL DATA LOADED / FALLBACK DATA ACTIVE status
+- Live Odds API connector
+- Auto Real Data mode
+- Timing Engine
+- Steam detection
+- Bet Structure Engine
+- Bankroll Engine
+- Bet Ledger
+- ROI Dashboard
+- Reddit sentiment overlay
 
-In Streamlit Cloud > App settings > Secrets:
+## Important
+
+If the app cannot pull real entries or live API data, it will clearly show:
+
+FALLBACK DATA ACTIVE
+
+That means it is using fallback race data, not real live race data.
+
+## Streamlit Secrets for Live Odds API
 
 ```toml
 LIVE_ODDS_PROVIDER = "THERACINGAPI"
 RACING_API_KEY = "your_key_here"
 RACING_API_BASE_URL = "https://api.theracingapi.com/v1"
+
+REDDIT_CLIENT_ID = ""
+REDDIT_CLIENT_SECRET = ""
+REDDIT_USER_AGENT = "derby-app"
 ```
-
-## Expected endpoints
-
-The generic adapter expects:
-
-```text
-GET /racecards?track=Churchill Downs&date=YYYY-MM-DD
-GET /odds?race_id=...
-```
-
-If your provider uses different endpoints or field names, update `live_odds_provider.py`.
-
-## Important
-
-This app does not place bets. Always verify entries, scratches, odds, and legality before wagering.
