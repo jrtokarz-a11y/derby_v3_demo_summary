@@ -1,19 +1,8 @@
-# Derby V4.4.1 Churchill Full Card Today — Fixed Package
+# Derby V4.4.2 Zero Odds Fix
 
-This version includes the missing `official_derby_provider.py`.
+Fixes:
+- ZeroDivisionError when a public race-card source returns odds as 0 or blank.
+- Invalid/missing odds now default safely to +1000 instead of crashing.
+- Keeps Churchill Full Card Today mode.
 
-Includes:
-- Churchill Full Card Today mode
-- Official Derby Live mode
-- Live Odds API mode
-- Auto Real Data mode
-- Timing Engine
-- Steam detection
-- Bet Structure Engine
-- Bankroll Engine
-- Bet Ledger
-- ROI Dashboard
-- Reddit overlay
-
-Use **Churchill Full Card Today** for the full Churchill race card.
-Use **Official Derby Live** only for the Derby race odds block.
+Upload/replace all files in this package, reboot Streamlit, then Clear cache / refresh columns.

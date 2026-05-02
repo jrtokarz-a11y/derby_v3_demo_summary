@@ -49,7 +49,7 @@ def fractional_to_american(value: str) -> int:
         f = float(value)
         if 1.01 <= f <= 100:
             return int((f - 1) * 100)
-        return int(f)
+        return int(f) if int(f) != 0 else 1000
     except Exception:
         return 1000
 
@@ -244,7 +244,9 @@ class ChurchillFullCardProvider:
                 raise RuntimeError(f"No runners parsed for race {race_number}.")
             out = []
             for row in rows:
-                base = int(row["american_odds"])
+                base = int(row["american_odds"] or 1000)
+                if base == 0:
+                    base = 1000
                 out.append(RunnerOdds(race_id, row["horse"], "Public Morning Line", base))
                 out.append(RunnerOdds(race_id, row["horse"], "ML + small", int(base * 1.01)))
                 out.append(RunnerOdds(race_id, row["horse"], "ML - small", max(100, int(base * 0.99))))

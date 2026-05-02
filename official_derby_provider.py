@@ -26,7 +26,7 @@ def fractional_to_american(value: str) -> int:
         f = float(value)
         if 1.01 <= f <= 100:
             return int((f - 1) * 100)
-        return int(f)
+        return int(f) if int(f) != 0 else 1000
     except Exception:
         return 1000
 
@@ -132,7 +132,9 @@ class OfficialDerbyLiveProvider:
             rows = self._parse_derby_rows()
             out = []
             for row in rows:
-                base = int(row["american_odds"])
+                base = int(row["american_odds"] or 1000)
+                if base == 0:
+                    base = 1000
                 out.append(RunnerOdds(race_id, row["horse"], "KentuckyDerby.com Official", base))
                 out.append(RunnerOdds(race_id, row["horse"], "Official + small", int(base * 1.01)))
                 out.append(RunnerOdds(race_id, row["horse"], "Official - small", max(100, int(base * 0.99))))

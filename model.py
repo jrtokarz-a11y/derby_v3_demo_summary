@@ -3,6 +3,29 @@ from itertools import permutations
 import pandas as pd
 import numpy as np
 
+def american_to_decimal(american):
+    """
+    Convert American odds to decimal odds.
+    Defensive fix: invalid odds like 0, blank, None, or NaN are treated as +1000
+    so the app does not crash when a public source emits a bad/missing price.
+    """
+    import pandas as pd
+
+    try:
+        if pd.isna(american):
+            american = 1000
+        american = int(float(american))
+    except Exception:
+        american = 1000
+
+    if american == 0:
+        american = 1000
+
+    if american > 0:
+        return 1 + american / 100
+    return 1 + 100 / abs(american)
+
+
 
 def american_to_decimal(odds: int) -> float:
     return 1 + odds / 100 if odds > 0 else 1 + 100 / abs(odds)

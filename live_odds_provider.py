@@ -106,7 +106,7 @@ class LiveOddsAPIProvider:
             # If decimal odds look like 6.5, convert to American.
             if 1.01 <= float(value) <= 100:
                 return int((float(value) - 1) * 100)
-            return int(value)
+            return int(value) if int(value) != 0 else 1000
         txt = str(value).strip()
         if txt.startswith("+") or txt.startswith("-"):
             try:
@@ -124,7 +124,7 @@ class LiveOddsAPIProvider:
             f = float(txt)
             if 1.01 <= f <= 100:
                 return int((f - 1) * 100)
-            return int(f)
+            return int(f) if int(f) != 0 else 1000
         except Exception:
             return 1000
 
