@@ -169,6 +169,15 @@ TRACK_OPTIONS = [
 ]
 
 
+def realdata_status_panel(mode: str):
+    if mode == "Churchill Full Card Today":
+        from churchill_full_card_provider import CHURCHILL_FULL_CARD_STATUS
+        if CHURCHILL_FULL_CARD_STATUS.get("loaded"):
+            st.success("CHURCHILL FULL CARD LOADED: " + CHURCHILL_FULL_CARD_STATUS.get("message", ""))
+        else:
+            st.error("CHURCHILL FULL CARD NOT LOADED: " + CHURCHILL_FULL_CARD_STATUS.get("message", "No current full-card data loaded."))
+
+
 def live_api_config_status():
     import os
     key_ok = bool(os.getenv("RACING_API_KEY") or os.getenv("LIVE_ODDS_API_KEY"))
@@ -209,8 +218,10 @@ with st.sidebar:
         """, unsafe_allow_html=True)
 
     st.header("Data mode")
-    mode = st.radio("Data source", ["Live Odds API", "Auto Real Data", "Demo"], index=0)
-    if mode == "Live Odds API":
+    mode = st.radio("Data source", ["Churchill Full Card Today", "Official Derby Live", "Live Odds API", "Auto Real Data", "Demo"], index=0)
+    if mode == "Churchill Full Card Today":
+        st.caption("Pulls the public Churchill Downs full race-card index for the selected date. No stale Derby fallback.")
+    elif mode == "Live Odds API":
         st.caption("Uses configured live odds provider from Streamlit Secrets. Falls back to Demo if unavailable.")
     elif mode == "Auto Real Data":
         st.caption("Uses public Equibase-style entries when available; falls back to Demo if parsing fails.")
@@ -323,6 +334,7 @@ with st.sidebar:
 provider = get_provider(mode if "mode" in globals() else "Demo")
 
 st.info(f"Current data source: {mode}")
+realdata_status_panel(mode)
 if mode == "Live Odds API":
     live_provider_name, live_key_ok, live_base_ok = live_api_config_status()
     if live_key_ok and live_base_ok:
@@ -336,6 +348,10 @@ try:
         st.info("Auto Real Data is ON. If entries cannot be parsed from the public source, the app automatically falls back to demo data.")
 except Exception as exc:
     st.error(f"Data load failed: {exc}")
+    st.stop()
+
+if not races:
+    st.error("No races loaded for the selected source/date/track. This is intentional: the app will not show stale fallback data in Churchill Full Card Today mode.")
     st.stop()
 
 @st.cache_data(ttl=600, show_spinner=False)

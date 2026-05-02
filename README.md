@@ -1,14 +1,11 @@
-# Derby Final Clean Version
+# Derby V4.4.1 Churchill Full Card Today — Fixed Package
 
-This is the clean final package.
+This version includes the missing `official_derby_provider.py`.
 
 Includes:
-- Track dropdowns
-- Race day presets
-- Oaks Day fallback card
-- Derby Day fallback card
-- REAL DATA LOADED / FALLBACK DATA ACTIVE status
-- Live Odds API connector
+- Churchill Full Card Today mode
+- Official Derby Live mode
+- Live Odds API mode
 - Auto Real Data mode
 - Timing Engine
 - Steam detection
@@ -16,24 +13,7 @@ Includes:
 - Bankroll Engine
 - Bet Ledger
 - ROI Dashboard
-- Reddit sentiment overlay
+- Reddit overlay
 
-## Important
-
-If the app cannot pull real entries or live API data, it will clearly show:
-
-FALLBACK DATA ACTIVE
-
-That means it is using fallback race data, not real live race data.
-
-## Streamlit Secrets for Live Odds API
-
-```toml
-LIVE_ODDS_PROVIDER = "THERACINGAPI"
-RACING_API_KEY = "your_key_here"
-RACING_API_BASE_URL = "https://api.theracingapi.com/v1"
-
-REDDIT_CLIENT_ID = ""
-REDDIT_CLIENT_SECRET = ""
-REDDIT_USER_AGENT = "derby-app"
-```
+Use **Churchill Full Card Today** for the full Churchill race card.
+Use **Official Derby Live** only for the Derby race odds block.

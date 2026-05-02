@@ -173,7 +173,15 @@ from real_scraper_provider import EquibaseOption1Provider
 from live_odds_provider import LiveOddsAPIProvider
 
 
+from churchill_full_card_provider import ChurchillFullCardProvider
+from official_derby_provider import OfficialDerbyLiveProvider
+
+
 def get_provider(mode: str):
+    if mode == "Churchill Full Card Today":
+        return ChurchillFullCardProvider()
+    if mode == "Official Derby Live":
+        return OfficialDerbyLiveProvider()
     if mode == "Live Odds API":
         return LiveOddsAPIProvider()
     if mode == "Auto Real Data":
@@ -183,3 +191,7 @@ def get_provider(mode: str):
     if mode == "Live API":
         return LiveProvider()
     return DemoProvider()
+
+
+class OaksAwareDemoProvider(DemoProvider):
+    pass
